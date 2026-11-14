@@ -183,6 +183,13 @@ reports noise, angle bias and what the detector does).
   (a quarter). First calibration (one person, laptop webcam): straight +0.03, full left
   +0.19, full right -0.20, so deviation 0.08. People's eyes moved ~2 s after a prompt
   finished, so the check waits speech time + 2.5 s before measuring.
+- Live end-to-end test: `.venv/bin/python scripts/test_befast_live.py --trials
+  normal,weak_left,hold_right` (spoken; normal check, acted-out left weakness, held gaze).
+  First run (one person) found: looking by turning the head read as a gaze palsy (now
+  "not assessed: turned the head"), excursions were measured from the screen rather than from
+  "look straight" (fixed), and a held gaze with the head turned past 20 deg lost its gaze
+  samples (gaze is now measured up to 30 deg). The held-gaze trial wasn't flagged because the
+  eyes went back to the screen twice; still to be re-run.
 - Arms: calibrate with `.venv/bin/python scripts/calibrate_arms.py --trials steady,sink_left`
   (runs the real arm step with spoken trials, records clips/arm_calibration.csv). The check
   compares each wrist with its own resting height, takes the highest steady point early in

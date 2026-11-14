@@ -63,7 +63,7 @@ class FrameFeatures:
     lip_gap: float | None = None
     # Horizontal eye position: iris offset from the middle of the eye opening, as a fraction
     # of the eye width, averaged over both eyes. + = looking to the patient's LEFT.
-    # About +-0.15..0.25 at full sideways gaze. None if eyes closed / head turned / no irises.
+    # About +-0.15..0.25 at full sideways gaze. None if eyes closed / head turned > 30 deg.
     gaze_h: float | None = None
     blink: float | None = None       # max eyeBlink blendshape (eyes closed ~ > 0.5)
     valid: bool = False
@@ -103,13 +103,6 @@ def compute_features(landmarks, blendshapes, matrix, w: int, h: int, t: float, v
     ff.jaw_open = round(bs.get("jawOpen", 0.0), 3)
     blink = max(bs.get("eyeBlinkLeft", 0.0), bs.get("eyeBlinkRight", 0.0))
     ff.blink = round(blink, 3)
-    if abs(yaw) > vc["max_yaw_deg"]:
-        ff.reason = "head turned"
-        return ff
-    if abs(pitch) > vc["max_pitch_deg"] or abs(roll) > vc["max_roll_deg"]:
-        ff.reason = "head tilted"
-        return ff
-
     # Undo head rotation, y down.
     # "2d" (default): only level the line between the outer eye corners (removes roll).
     #   On one recorded head sweep (Nov 13, 2026) this halved the turn-induced error vs
@@ -129,12 +122,22 @@ def compute_features(landmarks, blendshapes, matrix, w: int, h: int, t: float, v
     if iod < 1e-6:
         ff.reason = "no face"
         return ff
-    y = q[:, 1] / iod  # normalized, y down (bigger = lower on the face)
 
-    # Gaze before the talking gate: talking doesn't move the eyes.
-    if blink <= vc["blink_max"] and len(pts) >= 478:
+    # Gaze before the head-turn and talking gates: in a stroke the head often turns WITH the
+    # eyes (live test, Nov 14 2026: head 20-24 deg while holding the eyes right), and talking
+    # doesn't move the eyes. Only up to gaze_max_yaw_deg, beyond that the far eye is hidden.
+    if (blink <= vc["blink_max"] and len(pts) >= 478
+            and abs(yaw) <= vc.get("gaze_max_yaw_deg", 30) and abs(pitch) <= vc["max_pitch_deg"]):
         g = horizontal_gaze(q[:, :2])
         ff.gaze_h = None if g is None else round(g, 4)
+
+    if abs(yaw) > vc["max_yaw_deg"]:
+        ff.reason = "head turned"
+        return ff
+    if abs(pitch) > vc["max_pitch_deg"] or abs(roll) > vc["max_roll_deg"]:
+        ff.reason = "head tilted"
+        return ff
+    y = q[:, 1] / iod  # normalized, y down (bigger = lower on the face)
 
     # Talking gate: inner-lip gap at the mouth CENTER (a droop moves the corner, not
     # the center), plus jawOpen as a loose backstop. jawOpen alone rises with a droop.

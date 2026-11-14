@@ -38,7 +38,7 @@ GAZE_DEFAULTS = {
     "window_s": 30,           # deviation must hold this long (20 s at 0.08: ~2.6 false/h on sim)
     "deviation": 0.08,        # |median gaze - centre| above this = deviated (~half of full sideways)
     "agree_fraction": 0.9,    # share of window samples on that side (= fixed, not glancing)
-    "max_yaw_deg": 20,
+    "max_yaw_deg": 30,        # head turn up to which gaze samples count (see vision.gaze_max_yaw_deg)
     "max_gap_s": 10,          # no gaze samples for this long -> window restarts
 }
 EXAM_DEFAULTS = {
@@ -49,6 +49,7 @@ EXAM_DEFAULTS = {
     "alert_on_no_response": True,
     "max_gap_s": 5,           # no camera frames for this long -> check cancelled
     "min_samples": 5,
+    "head_turn_deg": 8,           # head turned this far toward a look-side: eyes not judged there
     "gaze_min_excursion": 0.04,   # weaker of the two directions below this x stronger = palsy
     "gaze_ratio": 0.45,
     "arm_raise_gain": 0.4,        # wrist this much higher (shoulder widths) than at rest = raised
@@ -199,6 +200,7 @@ class ExamRunner:
         self.data: dict[str, list] = {k: [] for k in ("center", "look_left", "look_right",
                                                       "arms", "arms_pre", "legs", "legs_pre")}
         self.turned = 0           # gaze-step frames lost to a turned head
+        self.yaws: dict[str, list[float]] = {"center": [], "look_left": [], "look_right": []}
         self.arm_frames = self.legs_seen = 0
         self.skipped: set[str] = set()
         self.finished = False
@@ -284,6 +286,8 @@ class ExamRunner:
 
     def _collect(self, st: Step, ff: FrameFeatures, pose: PoseFeatures | None):
         if st.kind == "gaze":
+            if ff.yaw is not None:
+                self.yaws[st.key].append(ff.yaw)
             if ff.gaze_h is not None:
                 self.data[st.key].append(ff.gaze_h)
             elif ff.reason == "head turned":
@@ -335,18 +339,37 @@ class ExamRunner:
                 "eyes not tracked (face out of view or eyes closed)"
             return _comp("not_assessed", why)
         measured_center = float(np.median(d["center"])) if len(d["center"]) >= n else None
-        ref = self.gaze_center if self.gaze_center is not None else (measured_center or 0.0)
+        # Excursions are measured from where the eyes went when asked to look straight, unless
+        # that is itself deviated from the patient's usual centre (then the eyes can't look
+        # straight, and the usual centre is the fairer reference).
+        if measured_center is not None and (self.gaze_center is None or abs(
+                measured_center - self.gaze_center) < self.gc["deviation"]):
+            ref = measured_center
+        else:
+            ref = self.gaze_center if self.gaze_center is not None else 0.0
         ex_l = float(np.percentile(d["look_left"], 80)) - ref
         ex_r = ref - float(np.percentile(d["look_right"], 20))
-        vals = dict(left=ex_l, right=ex_r, reference=ref)
-        if measured_center is not None:
-            vals["straight"] = measured_center - ref
+        # Head turn toward each side (yaw + = toward the patient's left), vs the straight step.
+        ymed = {k: float(np.median(v)) if v else None for k, v in self.yaws.items()}
+        y0 = ymed["center"] if ymed["center"] is not None else 0.0
+        head_l = None if ymed["look_left"] is None else ymed["look_left"] - y0
+        head_r = None if ymed["look_right"] is None else y0 - ymed["look_right"]
+        vals = dict(left=ex_l, right=ex_r, reference=ref, head_left=head_l, head_right=head_r)
+        if measured_center is not None and self.gaze_center is not None:
+            vals["straight"] = measured_center - self.gaze_center
         big, small = max(ex_l, ex_r), min(ex_l, ex_r)
         if big < ec["gaze_min_excursion"]:
             return _comp("no_response", "eyes did not move to either side", **vals)
         problems, side = [], None
         if small < ec["gaze_ratio"] * big:
-            side = "LEFT" if ex_l < ex_r else "RIGHT"
+            weak = "LEFT" if ex_l < ex_r else "RIGHT"
+            turn = head_l if weak == "LEFT" else head_r
+            if turn is not None and turn >= ec["head_turn_deg"]:
+                # live test: the head did the looking, the eyes stayed put -> not a palsy sign
+                return _comp("not_assessed", f"turned the head to the {weak.lower()} "
+                                             f"({turn:.0f} deg) instead of moving only the eyes",
+                             **vals)
+            side = weak
             problems.append(f"cannot look fully to the {side.lower()} "
                             f"(moved {max(small, 0):.2f} vs {big:.2f} to the {other(side).lower()})")
         if self.gaze_center is not None and measured_center is not None \
@@ -565,6 +588,14 @@ def _selftest():
     arms = ex._eval_arms()
     print("late raiser:", arms["status"], "-", arms["detail"])
     assert arms["status"] == "abnormal" and arms["side"] == "LEFT", arms
+
+    # live run 2: looked left by turning the head, eyes stayed centred -> not a palsy
+    e = ExamRunner(cfg, "selftest", gaze_center=0.0)
+    e.data.update(center=[0.0] * 30, look_left=[0.01] * 30, look_right=[-0.15] * 30)
+    e.yaws.update(center=[0.0] * 30, look_left=[12.0] * 30, look_right=[-2.0] * 30)
+    c = e._eval_gaze()
+    print("head turned instead of eyes:", c["status"], "-", c["detail"])
+    assert c["status"] == "not_assessed", c
 
     # patterns from the first live run: flipping tracking, and both arms lowered together
     def arms_case(left, right):

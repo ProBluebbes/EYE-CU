@@ -17,6 +17,9 @@ vision:
   max_yaw_deg: 20
   max_pitch_deg: 20
   max_roll_deg: 25
+  # Gaze (BE-FAST eyes) is still measured up to this head turn: a stroke often turns the head
+  # with the eyes. Other features keep max_yaw_deg.
+  gaze_max_yaw_deg: 30
   # Talking/eating -> frame skipped if the inner-lip gap at the mouth centre
   # (fraction of eye-corner distance) or the jawOpen blendshape exceeds these.
   # Don't gate on jawOpen alone: it rises with a one-sided droop too.
@@ -79,7 +82,7 @@ gaze:
   window_s: 30            # deviation must hold this long ... (20 s: ~2.6 false/h on sim)
   deviation: 0.08         # ... with |median - centre| at least this (~half of full sideways) ...
   agree_fraction: 0.9     # ... and this share of samples on that side (fixed, not glancing)
-  max_yaw_deg: 20
+  max_yaw_deg: 30          # use gaze samples up to this head turn (= vision.gaze_max_yaw_deg)
   max_gap_s: 10           # no gaze samples this long -> the window starts over
 
 # Voice-guided BE-FAST check (befast.ExamRunner, ~40 s): look straight/left/right, close eyes
@@ -95,6 +98,7 @@ exam:
   alert_on_no_response: true  # no response to any instruction -> alert
   max_gap_s: 5              # no camera frames this long -> check cancelled
   min_samples: 5
+  head_turn_deg: 8          # head turned this far toward a look-side = eyes not judged there
   gaze_min_excursion: 0.04  # neither direction beyond this = "eyes did not move"
   gaze_ratio: 0.45          # weaker direction < this x stronger = can't look to that side
   arm_raise_gain: 0.4       # wrist this much higher than at rest (while hearing the prompt) = raised
