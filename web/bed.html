@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StrokeWatch: bed</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <nav class="topnav"><a href="/">&larr; Ward dashboard</a> <span id="bed-name" class="bed-name"></span>
+    <span id="bed-kind" class="kind-badge" hidden>SIM</span></nav>
+  <header id="banner" class="banner baselining">
+    <div id="banner-text">Connecting…</div>
+    <div id="progress-wrap"><div id="progress"></div></div>
+  </header>
+
+  <main>
+    <section class="video-col">
+      <img id="video" alt="live camera">
+      <div id="skip" class="chip">–</div>
+    </section>
+
+    <section class="side-col">
+      <div class="card">
+        <div class="card-title">Change score <span class="muted">(vs. this patient's baseline)</span></div>
+        <div class="chart-wrap"><canvas id="chart"></canvas></div>
+        <div class="stats">
+          <div><span class="muted">score</span> <b id="score">–</b></div>
+          <div><span class="muted">above threshold</span> <b id="above">–</b></div>
+          <div><span class="muted">fps</span> <b id="fps">–</b></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Per-feature change <span class="muted">(+ = patient's left lower)</span></div>
+        <div id="zbars"></div>
+      </div>
+
+      <button id="reset">Reset &amp; rebuild baseline</button>
+      <div id="phone-actions" class="phone-actions" hidden>
+        <button id="say-test">Test phone speaker</button>
+        <button id="remove" class="danger">Remove this phone</button>
+      </div>
+      <p class="disclaimer">Hackathon demo, not a medical device.</p>
+    </section>
+  </main>
+
+  <script src="/static/bed.js"></script>
+</body>
+</html>

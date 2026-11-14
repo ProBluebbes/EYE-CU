@@ -1,0 +1,93 @@
+# StrokeWatch tunables. Paths are relative to the repo root.
+
+camera:
+  width: 640
+  height: 480
+  # Mount angle, clockwise degrees (0/90/180/270), applied before processing so the
+  # face is upright in the image. The head-tilt gate is measured in the rotated image.
+  rotate: 0
+
+vision:
+  model_path: models/face_landmarker.task
+  # Head-rotation removal: "2d" levels the eye line (roll only); "3d" uses MediaPipe's
+  # transformation matrix. 2d chosen Nov 13 2026 from ONE person's head-sweep clip
+  # (1.43 -> 0.76 mm SD). Provisional: revisit with more people / the ICU setup.
+  correction: 3d
+  # Frames with the head turned/tilted further than this are skipped.
+  max_yaw_deg: 20
+  max_pitch_deg: 20
+  max_roll_deg: 25
+  # Talking/eating -> frame skipped if the inner-lip gap at the mouth centre
+  # (fraction of eye-corner distance) or the jawOpen blendshape exceeds these.
+  # Don't gate on jawOpen alone: it rises with a one-sided droop too.
+  lip_gap_max: 0.06
+  jaw_open_max: 0.35
+  # eyeBlink blendshape above this = blinking -> eye feature skipped for that frame.
+  blink_max: 0.45
+
+detector:
+  # Seconds of VALID frames needed to build the baseline.
+  baseline_seconds: 20
+  min_baseline_frames: 60
+  # Floor on the robust spread (1.4826 * MAD) so a very still baseline doesn't
+  # turn sub-pixel jitter into huge z-scores. Units: fraction of eye-corner distance
+  # (eye_ratio is a log ratio).
+  # mouth_diff 0.006 ≈ 0.5 mm (x 90 mm eye-corner distance): the leftover error after
+  # pose matching on one recorded head sweep was ~0.45 mm (still-head noise ~0.1 mm).
+  # Threshold 4 x 0.006 ≈ 2.2 mm of lasting change. Was 0.012 (≈ 4.3 mm). Provisional.
+  min_spread:
+    mouth_diff: 0.012
+    eye_ratio: 0.10
+    brow_diff: 0.015
+  # Per-feature multiplier on |z|. Mouth droop is the most reliable stroke sign.
+  weights:
+    mouth_diff: 1.0
+    eye_ratio: 0.5
+    brow_diff: 0.7
+  # Pose-matched baseline: compare each frame only with baseline frames whose yaw and
+  # pitch are within this many degrees (cancels pose-dependent landmark bias). If fewer
+  # than min_pose_matches baseline frames are that close, the min_pose_matches nearest
+  # ones are used instead, as long as they're all within pose_max_deg; farther poses
+  # are skipped ("pose not in baseline"). pose_max_deg = pose_match_deg gives the old
+  # hard cut-off. 0 = original single baseline (no pose matching).
+  pose_match_deg: 0
+  min_pose_matches: 30
+  pose_max_deg: 10
+  # EWMA time constant for smoothing z-scores.
+  ewma_tau_s: 1.0
+  # Score above `threshold` for `alert_seconds` of valid time -> ALERT.
+  threshold: 4.0
+  # Onset = first crossing of this lower level; dropping below it ends the episode.
+  pre_threshold: 2.5
+  alert_seconds: 6
+  # Cap on time credited between two frames (so pauses/dropped frames don't count).
+  max_dt: 0.25
+
+server:
+  host: 127.0.0.1
+  port: 8000
+  jpeg_quality: 75
+
+beds:
+  # Max frames analyzed per second per camera bed (camera frames in between are dropped,
+  # which keeps latency low). The detector counts valid seconds, so it works at any rate.
+  analysis_fps: 15
+  # Frame rate of simulated patients (--mock-beds / --mock).
+  sim_fps: 10
+  # Dashboard thumbnails: frames per second and width in pixels.
+  thumb_fps: 4
+  thumb_width: 320
+  # A bed with no new frame for this long shows "camera offline".
+  offline_after_s: 3
+
+phone:
+  # What phone camera pages send (web/phone.html): frames per second, longest image side
+  # in pixels, and JPEG quality (0-1). Rotation is set per phone, on the phone.
+  send_fps: 10
+  max_side: 640
+  jpeg_quality: 0.7
+
+tunnel:
+  # cloudflared transport: auto (QUIC, falling back to HTTP/2), or force http2 if a
+  # network blocks QUIC (UDP 7844).
+  protocol: auto

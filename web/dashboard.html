@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StrokeWatch: ward</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <header class="dash-top">
+    <div class="brand">StrokeWatch <span class="muted">ward overview</span></div>
+    <div id="counts" class="counts"></div>
+    <button id="add-phone" class="addphone">Add phone</button>
+    <button id="sound" class="sound off" title="Browsers only allow sound after a click">Enable alarm sound</button>
+    <div id="clock" class="clock"></div>
+  </header>
+  <div id="conn" class="conn" hidden>Disconnected from server: retrying…</div>
+
+  <main class="dash">
+    <section id="grid" class="grid"></section>
+    <aside class="alerts">
+      <h2>Alerts <span id="alert-count" class="muted"></span></h2>
+      <div id="alert-list"><p class="muted">No alerts.</p></div>
+    </aside>
+  </main>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-box">
+      <button id="modal-close" class="modal-close" aria-label="Close">×</button>
+      <h2>Add a phone camera</h2>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <footer class="disclaimer">Hackathon demo, not a medical device. Simulated patients are labelled SIM.</footer>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
