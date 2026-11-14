@@ -44,7 +44,15 @@ function pushChart(st) {
 // ---------------------------------------------------------------- UI
 const fmtTime = (epoch) => new Date(epoch * 1000).toLocaleTimeString([], { hour12: false });
 
+// Short text for an open alert: its findings (face droop and/or BE-FAST check signs).
+function alertSigns(st) {
+  const f = (st.alert && st.alert.findings) || [];
+  return f.length ? f : [`Face: possible new ${st.side} facial droop`];
+}
+
 function render(st) {
+  renderExam(st);
+  $("banner-sub").hidden = true;
   $("bed-name").textContent = st.bed_name;
   document.title = `StrokeWatch: ${st.bed_name}`;
   $("bed-kind").textContent = { sim: "SIM", phone: "PHONE" }[st.kind] || "";
@@ -65,12 +73,22 @@ function render(st) {
   if (st.state === "baselining") {
     bannerText.textContent = `Building baseline… ${Math.round(st.baseline_progress * 100)}%`;
     $("progress").style.width = `${st.baseline_progress * 100}%`;
+  } else if (st.state === "monitoring" && st.exam && st.exam.active) {
+    banner.className = "banner exam";
+    bannerText.textContent = `BE-FAST check: ${st.exam.label}`;
   } else if (st.state === "monitoring") {
     bannerText.textContent = "Monitoring: no new droop";
   } else {
-    const onset = st.onset_time ? fmtTime(st.onset_time) : "?";
+    const onset = st.alert && st.alert.onset_time ? fmtTime(st.alert.onset_time)
+      : st.onset_time ? fmtTime(st.onset_time) : "?";
     const ack = st.alert && st.alert.status === "acknowledged" ? " (acknowledged)" : "";
-    bannerText.textContent = `STROKE ALERT: possible new ${st.side} facial droop, onset ${onset}${ack}`;
+    const signs = alertSigns(st);
+    const sided = st.side ? `${st.side}-sided ` : "";
+    bannerText.textContent = signs.length === 1 && signs[0].startsWith("Face:")
+      ? `STROKE ALERT: possible new ${st.side} facial droop, onset ${onset}${ack}`
+      : `STROKE ALERT: ${sided}stroke signs, onset ${onset}${ack}`;
+    $("banner-sub").textContent = signs.join(" · ");
+    $("banner-sub").hidden = signs.length === 1 && signs[0].startsWith("Face:");
   }
   if (st.state === "ALERT" && lastState !== "ALERT") beep();
   lastState = st.state;
@@ -99,6 +117,75 @@ function renderZ(st) {
       <span class="zval">${z.toFixed(1)}</span></div>`;
   }).join("");
 }
+
+// ---------------------------------------------------------------- BE-FAST check
+const COMP_NAMES = { eyes: "Eyes", arms: "Arm drift", legs: "Leg drift" };
+const ST_TEXT = { normal: "normal", abnormal: "ABNORMAL", no_response: "no response",
+                  not_assessed: "not assessed", skipped: "skipped" };
+let examSig = "";
+
+function renderExam(st) {
+  const ex = st.exam || { active: false };
+  $("exam-live").hidden = !ex.active;
+  $("exam-start").hidden = ex.active;
+  $("exam-cancel").hidden = !ex.active;
+  $("exam-start").disabled = st.state === "offline";
+  if (ex.active) {
+    $("exam-idx").textContent = `step ${ex.index}/${ex.count} · ${ex.phase}`;
+    $("exam-label").textContent = ex.label;
+    $("exam-say").textContent = `Spoken: "${ex.say}"`;
+    $("exam-prog").style.width = `${ex.progress * 100}%`;
+    $("exam-trigger").textContent = `Started ${fmtTime(ex.started_at)} · reason: ${ex.trigger}`;
+  }
+  const r = st.last_exam;
+  const sig = JSON.stringify(r && [r.finished_at, r.summary]);
+  if (sig !== examSig) {
+    examSig = sig;
+    const box = $("exam-result");
+    if (!r) box.innerHTML = '<span class="muted">Starts by itself on facial droop or a fixed gaze, or run it now.</span>';
+    else if (r.cancelled) box.innerHTML = `<div class="exam-head">Last check ${fmtTime(r.finished_at)}: stopped (${esc(r.cancelled)})</div>`;
+    else {
+      const rows = Object.entries(r.components).map(([k, c]) =>
+        `<div class="comp"><span>${COMP_NAMES[k] || k}</span><span class="st ${c.status}">${ST_TEXT[c.status] || c.status}</span><span>${esc(c.detail)}</span></div>`).join("");
+      box.innerHTML = `<div class="exam-head ${r.flagged ? "flagged" : ""}">Last check ${fmtTime(r.finished_at)}: ${esc(r.summary)}</div>
+        <div class="muted" style="font-size:14px;margin-bottom:4px">reason: ${esc(r.trigger)}${r.weak_side ? ` · weak side: ${r.weak_side}` : ""}</div>${rows}`;
+    }
+  }
+  renderGaze(st);
+}
+
+function renderGaze(st) {
+  const g = st.gaze, f = st.features || {};
+  const RANGE = 0.3;  // track spans -0.3 .. +0.3 (patient's right .. left)
+  const pos = (v) => 50 + Math.max(-1, Math.min(1, v / RANGE)) * 50;
+  if (!g) { $("gaze-text").textContent = "–"; return; }
+  $("gthr-l").style.left = `${pos(g.threshold)}%`;
+  $("gthr-r").style.left = `${pos(-g.threshold)}%`;
+  if (!g.ready) {
+    $("gdot").hidden = true;
+    $("gaze-text").textContent = `learning ${Math.round(g.progress * 100)}%`;
+    return;
+  }
+  const dot = $("gdot");
+  const now = f.gaze_h == null ? null : f.gaze_h - g.center;
+  dot.hidden = now == null;
+  if (now != null) { dot.style.left = `${pos(now)}%`; dot.classList.toggle("hot", !!g.deviation); }
+  if (st.exam && st.exam.active) {
+    $("gaze-text").textContent = now == null ? "check running" : `${Math.abs(now).toFixed(2)} ${now >= 0 ? "L" : "R"}`;
+  } else if (g.deviation) {
+    const held = g.since ? Math.round(st.t - g.since) : 0;
+    $("gaze-text").textContent = `held ${g.deviation} ${held}s`;
+  } else {
+    $("gaze-text").textContent = now == null ? "eyes not seen" : `${Math.abs(now).toFixed(2)} ${now >= 0 ? "L" : "R"}`;
+  }
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+$("exam-start").addEventListener("click", () => fetch(`${API}/exam`, { method: "POST" }));
+$("exam-cancel").addEventListener("click", () => fetch(`${API}/exam/cancel`, { method: "POST" }));
 
 let audio;
 function beep() {

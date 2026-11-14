@@ -12,6 +12,7 @@
     <span id="bed-kind" class="kind-badge" hidden>SIM</span></nav>
   <header id="banner" class="banner baselining">
     <div id="banner-text">Connecting…</div>
+    <div id="banner-sub" class="banner-sub" hidden></div>
     <div id="progress-wrap"><div id="progress"></div></div>
   </header>
 
@@ -22,6 +23,28 @@
     </section>
 
     <section class="side-col">
+      <div class="card" id="befast">
+        <div class="card-title">BE-FAST check <span class="muted">(eyes · arms · legs, voice-guided)</span></div>
+        <div id="exam-live" class="exam-live" hidden>
+          <div class="exam-step"><span id="exam-idx" class="muted"></span> <b id="exam-label"></b></div>
+          <div id="exam-say" class="muted"></div>
+          <div class="exam-bar"><div id="exam-prog"></div></div>
+          <div id="exam-trigger" class="muted"></div>
+        </div>
+        <div id="exam-result" class="exam-result"><span class="muted">Starts by itself on facial droop or a fixed gaze, or run it now.</span></div>
+        <div class="gaze-row" title="Horizontal eye position vs. this patient's centre (same orientation as the video)">
+          <span>gaze</span>
+          <div class="gtrack"><div class="gthr" id="gthr-r"></div><div class="gthr" id="gthr-l"></div>
+            <div class="gmid"></div><div id="gdot" class="gdot" hidden></div></div>
+          <span id="gaze-text" class="zval muted">–</span>
+        </div>
+        <div class="glabels muted"><span>patient's right</span><span>patient's left</span></div>
+        <div class="exam-btns">
+          <button id="exam-start">Run BE-FAST check</button>
+          <button id="exam-cancel" class="danger" hidden>Stop check</button>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-title">Change score <span class="muted">(vs. this patient's baseline)</span></div>
         <div class="chart-wrap"><canvas id="chart"></canvas></div>
