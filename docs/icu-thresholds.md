@@ -252,8 +252,35 @@ device's clips**:
 - Leave-one-setup-out, 2d vs 3d with correction (worst held mouth score within ±40°):
   2d 2.0 / 2.3 / 1.8 (overhead / Mac / iPhone), 3d 2.6 / 0.7 / 2.5.
 
-**Weaknesses:** one person. The curve may differ for other faces and camera heights, which
-`yaw_noise` only partly covers. Record more people and setups and refit with
+**Follow-up, same day: droops were missed with the head turned.** A heavy droop scored
+about 8 facing the camera but stayed under 4 when turned. Measured by warping a 6 mm droop
+into every 3rd frame of the turn clips, on each corner: the landmarks report 0.65–0.85 of
+it facing the camera, but less when turned, mostly on the far side (relative to facing:
+about 0.86 at 30°, 0.73 at 40°, 0.3–0.5 at 45–50°). Together with `yaw_noise` (−10%)
+and leftover bias working against the droop on one side, that cost about 60% at 30°.
+
+| Change | Setting | Revert with |
+|---|---|---|
+| Divide the mouth deviation by the measured signal loss for the side it points to | `detector.yaw_gain` | `yaw_gain: null` |
+| Safety margin off | `detector.yaw_noise` 0 | 0.15 x `min_spread` |
+
+Same held-angle test (device left out of the yaw_bias fit, droop scaled by that device's
+measured loss for the drooping side), ±35°, about 130 angle/clip combinations per row:
+
+| | Neutral, worst score | 6 mm droop not caught |
+|---|---|---|
+| Before (`yaw_noise` 0.15, no `yaw_gain`) | 2.4 | 13 |
+| `yaw_noise` 0.15 + `yaw_gain` | 2.4 | 7 |
+| **`yaw_noise` 0 + `yaw_gain` (chosen)** | **2.6** | **2** |
+
+The 2 misses (score 4.1 and 4.4) are where leftover bias works against the droop.
+Note also that facing the camera, only 0.65–0.85 of a droop is reported, so the 4.3 mm
+alert level corresponds to roughly 5–6.5 mm of real corner movement (synthetic warp, not
+yet checked with stickers).
+
+**Weaknesses:** one person. The curves may differ for other faces and camera heights.
+Next step: learn the leftover bias per patient from the baseline when it contains head
+turns. Record more people and setups and refit with
 `scripts/fit_yaw_bias.py`.
 
 ## Sources

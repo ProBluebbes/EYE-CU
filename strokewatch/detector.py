@@ -17,6 +17,9 @@ pose_match_deg: 0 restores the original single median/MAD baseline.
 yaw_noise widens the spread as the head turns away from the baseline's median yaw (by
 yaw_noise[f] per 10 deg, added in quadrature), so head-turn bias that vision.yaw_bias
 doesn't remove (other people / cameras) fades the score instead of raising an alert.
+yaw_gain does the opposite for real changes: the landmarks follow a droop less when the
+head is turned (mostly the far side), so the deviation is scaled back up by the measured
+loss, using the curve for whichever side the deviation points to.
 
 Score = max over features of |EWMA of weighted robust z|. Score >= threshold for
 alert_seconds of valid time -> ALERT (held until reset). Onset = first crossing of
@@ -169,6 +172,17 @@ class Detector:
         extra = k * abs(self._pose(ff)[0] - self.base_yaw) / 10.0
         return math.hypot(self.spread[f], extra)
 
+    def _gain(self, f: str, ff: FrameFeatures, dev: float) -> float:
+        """How much of a real change feature f still shows at this head turn, relative to
+        the baseline's turn (yaw_gain table; 1 = no table). The table is for a change on
+        the patient's LEFT (dev > 0); a RIGHT change uses the mirror image (-yaw)."""
+        tb = self.dc.get("yaw_gain") or {}
+        if f not in tb:
+            return 1.0
+        sgn = 1.0 if dev >= 0 else -1.0
+        g = lambda yaw: float(np.interp(sgn * yaw, tb["knots"], tb[f]))
+        return min(max(g(self._pose(ff)[0]) / g(self.base_yaw), 0.5), 2.0)
+
     def _score(self, ff: FrameFeatures, dt: float) -> str | None:
         """Update the score; returns a skip reason if the frame can't be scored."""
         m = self._match(*self._pose(ff))
@@ -182,7 +196,8 @@ class Detector:
             col = self.base_vals[m, j]
             if np.sum(~np.isnan(col)) < 5:
                 continue
-            z = self.dc["weights"][f] * (v - float(np.nanmedian(col))) / self._spread(f, ff)
+            dev = v - float(np.nanmedian(col))
+            z = self.dc["weights"][f] * dev / (self._spread(f, ff) * self._gain(f, ff, dev))
             self.ewma[f] += a * (z - self.ewma[f])
         dom = max(self.active, key=lambda f: abs(self.ewma[f]))
         self.score = abs(self.ewma[dom])

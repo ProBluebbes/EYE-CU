@@ -99,8 +99,9 @@ Any config value can be overridden: `--set detector.threshold=3.5 --set vision.l
   (inner-lip gap at the mouth centre, or jawOpen > 0.35), and no face. Blinks skip only
   the eye feature.
 - **detector.py**: baseline = median and robust spread of `baseline_seconds` of valid
-  frames (spread floored by `min_spread`). The spread widens a little as the head turns
-  away from the baseline angle (`yaw_noise`), so leftover turn bias can't raise an alert.
+  frames (spread floored by `min_spread`). With the head turned, the landmarks follow a
+  droop less (mostly on the far side), so the mouth deviation is scaled back up by the
+  measured loss (`yaw_gain`). `yaw_noise` (off) can widen the spread with turn instead.
   Optional pose-matched baseline (`pose_match_deg`, off by default): compare only with
   baseline frames at a similar angle.
   Then weighted robust z per feature, EWMA-smoothed, score = max |z|. ALERT when

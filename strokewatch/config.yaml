@@ -61,12 +61,22 @@ detector:
   # from the baseline's median yaw (added in quadrature), so turn bias that yaw_bias
   # doesn't fully remove (other people/cameras) fades the score instead of alerting.
   # Costs sensitivity only while the head is turned. 0 / omitted = off.
-  # 0.15 x min_spread: at 40 deg the alert level rises from ~4.3 to ~5 mm. 0.25 missed
-  # 5 mm droops at large turns; the false-alarm worst case is set by tilt, not turn.
+  # Off since Nov 14 2026: together with the far-side signal loss (yaw_gain) it hid heavy
+  # droops with the head turned. With yaw_gain on and this off, a neutral face held within
+  # ±35 deg still peaks at 2.6 (device left out of the fit). Try 0.15 x min_spread
+  # (0.0018 / 0.015 / 0.00225) if other people or cameras give false alarms when turned.
   yaw_noise:
-    mouth_diff: 0.0018
-    eye_ratio: 0.015
-    brow_diff: 0.00225
+    mouth_diff: 0.0
+    eye_ratio: 0.0
+    brow_diff: 0.0
+  # Share of a real change the landmarks still report with the head turned (yaw, deg),
+  # relative to facing the camera, for a change on the patient's LEFT; a RIGHT change uses
+  # the mirror image. Deviations are divided by it (clamped 0.5-2). Measured Nov 14 2026 by
+  # warping a 6 mm droop into the Mac and iPhone turn clips (left corner and mirrored right
+  # corner averaged; the far side loses most). Mouth only; others not measured.
+  yaw_gain:
+    knots: [-60, -50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50, 60]
+    mouth_diff: [0.79, 0.85, 0.96, 0.99, 1.0, 1.0, 1.0, 0.97, 0.92, 0.86, 0.73, 0.6, 0.6]
   # Per-feature multiplier on |z|. Mouth droop is the most reliable stroke sign.
   weights:
     mouth_diff: 1.0
