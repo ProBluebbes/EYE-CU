@@ -166,8 +166,11 @@ Key findings:
 
 > **Status (Nov 13, 2026, later): reverted for the MVP.** Live phone tests gave too many
 > "pose not in baseline" skips (a still 20 s baseline covers < 1° of head angle, and at
-> 10 fps the head-sweep clip skipped 74% of frames). `config.yaml` is back to `3d`,
-> `pose_match_deg: 0`, `mouth_diff: 0.012`. The detector now also has a nearest-neighbour
+> 10 fps the head-sweep clip skipped 74% of frames). `config.yaml` is back to
+> `pose_match_deg: 0`, `mouth_diff: 0.012`. `correction` was briefly back to `3d`, then
+> set to `2d` again to allow `max_yaw_deg: 35` (was 20). Fake mouth z from turning, at
+> floor 0.012: 3d 1.73 mm/10° → z 4.0 at 25°; 2d 0.76 mm/10° → z 2.5 at 35°. Detector
+> peak on the head-sweep clip (±24°, no yaw gate): 3d 2.61, 2d 1.06. The detector now also has a nearest-neighbour
 > fallback (`pose_max_deg`, default 10°) for when pose matching is turned back on.
 
 **Changes made** (and how to revert):

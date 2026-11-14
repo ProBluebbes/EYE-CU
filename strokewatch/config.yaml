@@ -12,9 +12,14 @@ vision:
   # Head-rotation removal: "2d" levels the eye line (roll only); "3d" uses MediaPipe's
   # transformation matrix. 2d chosen Nov 13 2026 from ONE person's head-sweep clip
   # (1.43 -> 0.76 mm SD). Provisional: revisit with more people / the ICU setup.
-  correction: 3d
+  # 2d also halves the fake mouth asymmetry from turning the head (0.76 vs 1.73 mm per
+  # 10 deg of yaw), which is what allows the wider max_yaw_deg below.
+  correction: 2d
   # Frames with the head turned/tilted further than this are skipped.
-  max_yaw_deg: 20
+  # Yaw 35 (was 20): with 2d, a 35 deg turn gives a fake mouth z of ~2.5, under the
+  # threshold of 4. With 3d keep this at 20 (25 deg already reaches z 4). Measured on one
+  # clip up to 24 deg; beyond that is extrapolated.
+  max_yaw_deg: 35
   max_pitch_deg: 20
   max_roll_deg: 25
   # Talking/eating -> frame skipped if the inner-lip gap at the mouth centre
