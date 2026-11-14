@@ -134,8 +134,32 @@ def compute_features(landmarks, blendshapes, matrix, w: int, h: int, t: float, v
         open_l = np.mean([y[b] - y[a] for a, b in EYE_LIDS_L])
         if open_r > 1e-4 and open_l > 1e-4:
             ff.eye_ratio = float(math.log(open_r / open_l))
+    remove_yaw_bias(ff, vc)
     ff.valid = True
     return ff
+
+
+YAW_BIAS_FEATURES = ("mouth_diff", "eye_ratio", "brow_diff")
+
+
+def yaw_bias_table(vc: dict) -> dict | None:
+    """The vision.yaw_bias table if it applies to the configured correction, else None."""
+    tb = vc.get("yaw_bias")
+    if not tb or tb.get("correction") != vc.get("correction", "2d"):
+        return None
+    return tb
+
+
+def remove_yaw_bias(ff: FrameFeatures, vc: dict) -> None:
+    """Subtract the fake asymmetry that turning the head causes (vision.yaw_bias, fitted
+    on recorded head-turn clips by scripts/fit_yaw_bias.py). In place."""
+    tb = yaw_bias_table(vc)
+    if tb is None or ff.yaw is None:
+        return
+    for f in YAW_BIAS_FEATURES:
+        v = getattr(ff, f)
+        if v is not None and f in tb:
+            setattr(ff, f, v - float(np.interp(ff.yaw, tb["knots"], tb[f])))
 
 
 class FaceAnalyzer:
@@ -150,6 +174,10 @@ class FaceAnalyzer:
         )
         self.landmarker = mpv.FaceLandmarker.create_from_options(opts)
         self._last_ms = -1
+        if self.vc.get("yaw_bias") and yaw_bias_table(self.vc) is None:
+            print(f"warning: vision.yaw_bias was fitted for correction "
+                  f"{self.vc['yaw_bias'].get('correction')!r}, not {self.vc.get('correction')!r}; "
+                  "head-turn bias is NOT removed. Refit with scripts/fit_yaw_bias.py.")
 
     def process(self, frame_bgr: np.ndarray, t: float) -> tuple[FrameFeatures, np.ndarray | None]:
         """Returns features and the landmark pixel coords (N x 2) for drawing, or None."""

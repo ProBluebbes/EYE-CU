@@ -14,6 +14,10 @@ Centre = median of the matched baseline values; spread = robust spread of baseli
 residuals around their own pose-matched medians (1.4826 * MAD), floored at min_spread.
 pose_match_deg: 0 restores the original single median/MAD baseline.
 
+yaw_noise widens the spread as the head turns away from the baseline's median yaw (by
+yaw_noise[f] per 10 deg, added in quadrature), so head-turn bias that vision.yaw_bias
+doesn't remove (other people / cameras) fades the score instead of raising an alert.
+
 Score = max over features of |EWMA of weighted robust z|. Score >= threshold for
 alert_seconds of valid time -> ALERT (held until reset). Onset = first crossing of
 pre_threshold in that episode; dropping below pre_threshold ends the episode.
@@ -67,6 +71,7 @@ class Detector:
         self.baseline_time = 0.0
         self.base_pose: np.ndarray | None = None  # (n, 2)
         self.base_vals: np.ndarray | None = None  # (n, len(FEATURES))
+        self.base_yaw = 0.0
         self.active: list[str] = []
         self.spread: dict[str, float] = {}
         self.last_t: float | None = None
@@ -108,6 +113,7 @@ class Detector:
     def _finish_baseline(self):
         arr = np.array(self.samples, dtype=float)
         self.base_pose, self.base_vals = arr[:, :2], arr[:, 2:]
+        self.base_yaw = float(np.median(self.base_pose[:, 0]))
         self.samples = []
         n = len(arr)
         self.active = [f for j, f in enumerate(FEATURES)
@@ -154,6 +160,15 @@ class Detector:
                 valid, reason = False, skip
         return self._status(ff.t, valid, reason)
 
+    def _spread(self, f: str, ff: FrameFeatures) -> float:
+        """Baseline spread, widened by yaw_noise[f] per 10 deg of head turn away from the
+        baseline's median yaw (head-turn bias the yaw_bias table doesn't fully remove)."""
+        k = (self.dc.get("yaw_noise") or {}).get(f, 0.0)
+        if not k:
+            return self.spread[f]
+        extra = k * abs(self._pose(ff)[0] - self.base_yaw) / 10.0
+        return math.hypot(self.spread[f], extra)
+
     def _score(self, ff: FrameFeatures, dt: float) -> str | None:
         """Update the score; returns a skip reason if the frame can't be scored."""
         m = self._match(*self._pose(ff))
@@ -167,7 +182,7 @@ class Detector:
             col = self.base_vals[m, j]
             if np.sum(~np.isnan(col)) < 5:
                 continue
-            z = self.dc["weights"][f] * (v - float(np.nanmedian(col))) / self.spread[f]
+            z = self.dc["weights"][f] * (v - float(np.nanmedian(col))) / self._spread(f, ff)
             self.ewma[f] += a * (z - self.ewma[f])
         dom = max(self.active, key=lambda f: abs(self.ewma[f]))
         self.score = abs(self.ewma[dom])

@@ -211,6 +211,51 @@ worsening, and it passes.
 - **One person, a phone camera, lying flat.** Repeat with more people, the real
   camera and the real geometry before trusting the 2.2 mm figure.
 
+## 7. Head-turn correction (Nov 14, 2026)
+
+**Clips:** neutral face, about 45 s each, one person: `macsidetoside.mov` and
+`phonesidetoside.MOV` (left-right turns to about ±60°), `mactilt.mov` and `phonetilt.MOV`
+(ear-to-shoulder tilt to about ±43°), Mac webcam and iPhone, plus the earlier `tilt.mov`
+(iPhone overhead, lying flat).
+
+**Findings:**
+- **Sideways tilt (roll) is not the problem.** In the tilt clips every feature stays
+  within about 1 mm up to ±43°, with both 2d and 3d.
+- **Turning (yaw) is.** With 2d, mouth asymmetry drifts about 1.7 mm per 10° of turn
+  (about 6 mm at 35°, a fake score of 6). Eye and brow drift too. The Mac and iPhone
+  curves nearly overlap. The overhead clip is flatter.
+- Other geometry (facial-midline axis, 3D alignment to the person's own straight-on face,
+  2D affine) didn't do clearly better: the bias seems to come from the landmark model.
+- In the tilt clips, tilting 40° also reads as about 20° of turn (the person turns slightly
+  while tilting), without the matching drift. The correction slightly over-corrects there.
+
+**Changes:**
+
+| Change | Setting | Revert with |
+|---|---|---|
+| Subtract a fitted per-feature bias curve over yaw (equal weight per clip) | `vision.yaw_bias` | `yaw_bias: null` |
+| Widen spread with turn away from the baseline angle: 0.15 x `min_spread` per 10° | `detector.yaw_noise` | 0 |
+| Turn gate 35° → 40°; sideways-tilt gate 25° → 40° | `vision.max_yaw_deg`, `max_roll_deg` | 20 / 25 |
+| 2d correction (needed for the fitted table) | `vision.correction: 2d` | refit for `3d` |
+
+**Validation:** full pipeline (features + detector at 10 fps); baseline facing the camera,
+then the head held at each angle for 10 s; the bias curve refit **without the tested
+device's clips**:
+- Neutral face, held within the gates: peak score at most 2.8 (Mac, 40° tilt), at most 2.1
+  for turns; no alerts. Without the correction: about 6–7 at 35–40°.
+- Droop added while the head is held (either side; the ±40° bands are half outside the
+  gate, so they're left out): **7 mm** alerts at every angle within ±35°; **6 mm** at all
+  but 3 of about 70 angle/clip combinations; **5 mm** (just above the 4.3 mm level
+  for a face looking at the camera) mainly within about ±10°, since leftover bias works
+  against it on one side. `yaw_noise` 0.25 lost more at large turns, so 0.15 was chosen.
+  In short: looking at the camera ≈ 4.3 mm; turned up to 35° ≈ 6–7 mm.
+- Leave-one-setup-out, 2d vs 3d with correction (worst held mouth score within ±40°):
+  2d 2.0 / 2.3 / 1.8 (overhead / Mac / iPhone), 3d 2.6 / 0.7 / 2.5.
+
+**Weaknesses:** one person. The curve may differ for other faces and camera heights, which
+`yaw_noise` only partly covers. Record more people and setups and refit with
+`scripts/fit_yaw_bias.py`.
+
 ## Sources
 
 From web searches, Nov 2026:

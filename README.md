@@ -93,13 +93,16 @@ Any config value can be overridden: `--set detector.threshold=3.5 --set vision.l
   eye corners (`vision.correction: 2d`; `3d` = full rotation removal from MediaPipe's
   transformation matrix), and normalizes by the distance between the outer eye corners.
   Features (+ = patient's LEFT lower): mouth-corner height difference, log eye-opening
-  ratio, brow-height difference. Skips frames for head turned/tilted > 20°, talking
+  ratio, brow-height difference. Then subtracts the fake asymmetry that turning the head
+  causes (`vision.yaw_bias`, a per-feature curve over yaw fitted on recorded head-turn
+  clips). Skips frames with the head turned > 40°, sideways tilt > 40°, nodded > 20°, talking
   (inner-lip gap at the mouth centre, or jawOpen > 0.35), and no face. Blinks skip only
   the eye feature.
-- **detector.py**: the baseline stores each frame's head angle and features. Each new
-  frame is compared with baseline frames at a similar angle (within `pose_match_deg`)
-  to cancel angle-dependent landmark bias; angles not seen in the baseline are skipped.
-  Spread = robust spread of those angle-matched residuals, floored by `min_spread`.
+- **detector.py**: baseline = median and robust spread of `baseline_seconds` of valid
+  frames (spread floored by `min_spread`). The spread widens a little as the head turns
+  away from the baseline angle (`yaw_noise`), so leftover turn bias can't raise an alert.
+  Optional pose-matched baseline (`pose_match_deg`, off by default): compare only with
+  baseline frames at a similar angle.
   Then weighted robust z per feature, EWMA-smoothed, score = max |z|. ALERT when
   score ≥ `threshold` for `alert_seconds` of valid time. Onset = first crossing of
   `pre_threshold`. Held until `/reset`.
@@ -120,8 +123,12 @@ provisional changes. Measure a clip with
 `.venv/bin/python scripts/mapping_report.py clips/X.mov` (finds the rotation itself, and
 reports noise, angle bias and what the detector does).
 
-- Score scale: with `min_spread.mouth_diff: 0.006`, threshold 4 ≈ a 0.024 change in
-  mouth_diff ≈ 2.2 mm at the corner on an adult face (provisional, from one person's clips).
+- Score scale: with `min_spread.mouth_diff: 0.012`, threshold 4 ≈ a 0.048 change in
+  mouth_diff ≈ 4.3 mm at the corner on an adult face (from one person's clips).
+- Head-turn bias: record neutral-face clips turning slowly left-right past 40° on each
+  device/camera position, then refit and paste the printed block into `config.yaml`:
+  `.venv/bin/python scripts/fit_yaw_bias.py clips/*.mov clips/*.MOV`. It also prints how
+  well the curve carries over to a clip left out of the fit.
 - `vision.lip_gap_max` (0.06) is the talking gate. It was checked only on synthetic clips.
   Watch the `lip_gap` column in replay CSVs on real talking/resting clips and adjust.
   Don't gate on jawOpen alone: a one-sided droop raises it too.

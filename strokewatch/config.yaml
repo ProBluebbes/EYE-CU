@@ -10,18 +10,31 @@ camera:
 vision:
   model_path: models/face_landmarker.task
   # Head-rotation removal: "2d" levels the eye line (roll only); "3d" uses MediaPipe's
-  # transformation matrix. 2d chosen Nov 13 2026 from ONE person's head-sweep clip
-  # (1.43 -> 0.76 mm SD). Provisional: revisit with more people / the ICU setup.
-  # 2d also halves the fake mouth asymmetry from turning the head (0.76 vs 1.73 mm per
-  # 10 deg of yaw), which is what allows the wider max_yaw_deg below.
+  # transformation matrix. 2d: lower noise (0.76 vs 1.43 mm SD on a head sweep) and, after
+  # the yaw_bias correction below, the smaller worst case across devices (Nov 14 2026).
+  # Changing this needs a refit of yaw_bias (it is ignored, with a warning, otherwise).
   correction: 2d
   # Frames with the head turned/tilted further than this are skipped.
-  # Yaw 35 (was 20): with 2d, a 35 deg turn gives a fake mouth z of ~2.5, under the
-  # threshold of 4. With 3d keep this at 20 (25 deg already reaches z 4). Measured on one
-  # clip up to 24 deg; beyond that is extrapolated.
-  max_yaw_deg: 35
+  # Yaw 40: with yaw_bias, a head held anywhere within ±40 deg gives a fake score of at
+  # most ~2.3 on a device left out of the fit (threshold 4). Without it, 35 deg gave ~6.
+  # Beyond ~45 deg the talking gate starts misfiring and the curves differ per device.
+  # Roll 40: pure sideways tilt (ear to shoulder) barely moves any feature up to ±43 deg
+  # on the Mac and iPhone tilt clips.
+  max_yaw_deg: 40
   max_pitch_deg: 20
-  max_roll_deg: 25
+  max_roll_deg: 40
+  # Fake asymmetry each feature shows when the head is turned (yaw, degrees), subtracted
+  # per frame (linear interpolation; clamped beyond the ends). Fitted with equal weight per
+  # clip, so it's a middle ground between devices. Refit (and paste) after recording more
+  # people/devices:  python scripts/fit_yaw_bias.py clips/*.mov
+  # Only used if `correction` matches; null = off.
+  # Fitted by scripts/fit_yaw_bias.py on: macsidetoside.mov, phonesidetoside.MOV, mactilt.mov, phonetilt.MOV, tilt.mov
+  yaw_bias:
+    correction: 2d
+    knots: [-60, -50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50, 60]
+    mouth_diff: [0.10932, 0.08521, 0.06003, 0.04063, 0.02398, 0.00906, -0.00000, -0.00823, -0.02264, -0.04948, -0.07842, -0.10549, -0.12664]
+    eye_ratio: [-0.24357, -0.22680, -0.15830, -0.07519, -0.01730, 0.00655, 0.00000, 0.02055, 0.06917, 0.13329, 0.16698, 0.14407, 0.08559]
+    brow_diff: [-0.16800, -0.10888, -0.04865, -0.01327, -0.00600, -0.00550, 0.00000, 0.00847, 0.01444, 0.02195, 0.04056, 0.08020, 0.13422]
   # Talking/eating -> frame skipped if the inner-lip gap at the mouth centre
   # (fraction of eye-corner distance) or the jawOpen blendshape exceeds these.
   # Don't gate on jawOpen alone: it rises with a one-sided droop too.
@@ -44,6 +57,16 @@ detector:
     mouth_diff: 0.012
     eye_ratio: 0.10
     brow_diff: 0.015
+  # Safety margin for head turns: spread is widened by this much per 10 deg of yaw away
+  # from the baseline's median yaw (added in quadrature), so turn bias that yaw_bias
+  # doesn't fully remove (other people/cameras) fades the score instead of alerting.
+  # Costs sensitivity only while the head is turned. 0 / omitted = off.
+  # 0.15 x min_spread: at 40 deg the alert level rises from ~4.3 to ~5 mm. 0.25 missed
+  # 5 mm droops at large turns; the false-alarm worst case is set by tilt, not turn.
+  yaw_noise:
+    mouth_diff: 0.0018
+    eye_ratio: 0.015
+    brow_diff: 0.00225
   # Per-feature multiplier on |z|. Mouth droop is the most reliable stroke sign.
   weights:
     mouth_diff: 1.0
