@@ -417,6 +417,10 @@ class ExamRunner:
         if not (vis_l and vis_r):
             seen = "left" if vis_l else "right"
             return _comp("not_assessed", f"only the {seen} {limb} was in view")
+        jumpy = [side for side, ser in (("left", sl), ("right", sr)) if self._jumpy(ser)]
+        if jumpy:
+            return _comp("not_assessed", f"{limb} positions jumped around ({' and '.join(jumpy)}): "
+                                         f"tracking unreliable, or the {limb}s kept moving{note}")
         s_l, e_l = self._start_end(sl)
         s_r, e_r = self._start_end(sr)
         vals = dict(start_left=s_l, start_right=s_r, end_left=e_l, end_right=e_r,
@@ -437,9 +441,12 @@ class ExamRunner:
                              weak, **vals)
             # borderline: both about as high -> judge them on drift
         d_l, d_r = s_l - e_l, s_r - e_r
-        flag_l = (d_l >= drift and d_l - d_r >= asym) or \
+        # One-sided drift needs the OTHER limb to have stayed up (dropped less than half as
+        # much): on the first live run both arms were lowered together near the end and the
+        # left merely dropped a little further, which isn't a one-sided sign.
+        flag_l = (d_l >= drift and d_l - d_r >= asym and d_r < 0.5 * d_l) or \
             (fell is not None and e_l < fell and e_r > fell + 0.5)
-        flag_r = (d_r >= drift and d_r - d_l >= asym) or \
+        flag_r = (d_r >= drift and d_r - d_l >= asym and d_l < 0.5 * d_r) or \
             (fell is not None and e_r < fell and e_l > fell + 0.5)
         if flag_l != flag_r:
             weak = "LEFT" if flag_l else "RIGHT"
@@ -447,9 +454,33 @@ class ExamRunner:
             return _comp("abnormal", f"{weak.lower()} {limb} drifted down "
                                      f"({dw:.2f} vs {do:.2f} {unit} in {self._hold(limb)} s){note}",
                          weak, **vals)
+        if d_l >= 1.0 and d_r >= 1.0:
+            return _comp("not_assessed", f"both {limb}s were lowered before the end of the hold"
+                                         f"{note}", **vals)
         if d_l >= drift and d_r >= drift:
             return _comp("normal", f"both {limb}s sank about equally (tiredness?){note}", **vals)
         return _comp("normal", f"both {limb}s held steady{note}", **vals)
+
+    @staticmethod
+    def _jumpy(series: list[tuple[float, float]]) -> bool:
+        """True if the per-second medians make big moves (> 0.3) that reverse direction twice
+        or more, i.e. up-down-up (pose tracking flipping, seen on the first live run with arms
+        pointing at a laptop camera). A steady hold, a late raise, a slow sink or a single drop
+        all pass."""
+        if len(series) < 6:
+            return False
+        ts = np.array([t for t, _ in series])
+        hs = np.array([h for _, h in series])
+        meds = []
+        for t in np.arange(ts[0], ts[-1] + 1e-9, 1.0):
+            m = (ts >= t) & (ts < t + 1.0)
+            if m.sum() >= 3:
+                meds.append(float(np.median(hs[m])))
+        if len(meds) < 3:
+            return False
+        big = [np.sign(d) for d in np.diff(meds) if abs(d) > 0.3]
+        reversals = sum(1 for a, b in zip(big, big[1:]) if a != b)
+        return reversals >= 2
 
     @staticmethod
     def _hold(limb: str) -> int:
@@ -532,6 +563,21 @@ def _selftest():
     arms = ex._eval_arms()
     print("late raiser:", arms["status"], "-", arms["detail"])
     assert arms["status"] == "abnormal" and arms["side"] == "LEFT", arms
+
+    # patterns from the first live run: flipping tracking, and both arms lowered together
+    def arms_case(left, right):
+        e = ExamRunner(cfg, "selftest", gaze_center=0.0)
+        e.data["arms_pre"] = [PoseFeatures(t=0, arm_l=-1.6, arm_r=-1.6)]
+        e.data["arms"] = [(i / 30, left(i / 30), right(i / 30), 0.8) for i in range(300)]
+        return e._eval_arms()
+    flip = lambda t: 0.3 if int(t) % 3 else -1.0  # noqa: E731
+    c = arms_case(flip, flip)
+    print("flipping tracking:", c["status"], "-", c["detail"])
+    assert c["status"] == "not_assessed", c
+    both_down = lambda off: (lambda t: (1.0 - off) if t < 6.5 else -1.3)  # noqa: E731
+    c = arms_case(both_down(0.2), both_down(0.0))
+    print("both lowered early:", c["status"], "-", c["detail"])
+    assert c["status"] != "abnormal", c
 
     # no response at all (e.g. confused/aphasic, or a photo): flagged as such
     ex = ExamRunner(cfg, "selftest", gaze_center=0.0)

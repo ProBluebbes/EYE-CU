@@ -183,6 +183,14 @@ reports noise, angle bias and what the detector does).
   (a quarter). First calibration (one person, laptop webcam): straight +0.03, full left
   +0.19, full right -0.20, so deviation 0.08. People's eyes moved ~2 s after a prompt
   finished, so the check waits speech time + 2.5 s before measuring.
-- Arms: the check compares each wrist with its own resting height (seen while the prompt is
-  still being spoken) and then tracks the drop over 10 s. A camera at face height with the
-  shoulders in view works best. Legs are only checked if hips and knees are in view.
+- Arms: calibrate with `.venv/bin/python scripts/calibrate_arms.py --trials steady,sink_left`
+  (runs the real arm step with spoken trials, records clips/arm_calibration.csv). The check
+  compares each wrist with its own resting height, takes the highest steady point early in
+  the hold as the start, and tracks the drop over 10 s. First live run (one person, laptop
+  webcam): arms raised 5–7 s after the prompt began; arms pointing at the camera read about
+  +1.0 (perspective, harmless); eye closure read clearly (eyeBlink ~0.8 closed vs ~0.15
+  open); pose tracking sometimes flipped between "up" and "down" within a second. So:
+  flipping tracking -> "not assessed", both arms lowered early -> "not assessed", and a
+  one-sided drift needs the other arm to stay up. Not yet seen live: a clean one-arm sink.
+  Shoulders and hands in view, camera at chest-to-face height works best. Legs are only
+  checked if hips and knees are in view (never tested live).
