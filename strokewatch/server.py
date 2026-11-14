@@ -20,6 +20,8 @@ Endpoints
   POST /api/beds/<id>/calibrate   same, as a guided calibration (look straight, turn and hold
                                   each side, straight again); prompts in the status
   POST /api/beds/<id>/say         {"text": ...} phone beds: speak through the phone
+  POST /api/beds/<id>/exam        start a voice-guided BE-FAST check (eyes, arms, legs)
+  POST /api/beds/<id>/exam/cancel stop a running check
   DELETE /api/beds/<id>           phone beds: remove
   POST /api/alerts/<n>/ack        acknowledge (silences the alarm, bed stays in ALERT)
   POST /api/alerts/<n>/resolve    {"resolution": "false_alarm"|"confirmed"} + rebuild baseline
@@ -43,6 +45,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import ROOT, apply_overrides, load_config
 from .access import AccessKeyMiddleware, new_key
+from .befast import ServerVoice, exam_cfg
 from .beds import BedManager, CameraBed, PhoneBed, SimBed, bed_cfg
 from .mock import single_scenario, ward_scenarios
 from .tunnel import Tunnel
@@ -67,8 +70,22 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
                ) -> FastAPI:
     key = key or new_key()
 
+    voice = ServerVoice(exam_cfg(manager.cfg)["server_voice"])
+
     @asynccontextmanager
     async def lifespan(_app):
+        loop = asyncio.get_running_loop()
+
+        def say_hook(bed, text: str, step: str | None):
+            """BE-FAST check prompts (called from bed threads). Phones speak and show the
+            prompt on screen; webcam beds use this computer's speaker; SIM beds stay silent."""
+            if isinstance(bed, PhoneBed):
+                msg = {"type": "say", "text": text, "step": step}
+                asyncio.run_coroutine_threadsafe(phone_send(bed, msg), loop)
+            elif isinstance(bed, CameraBed):
+                voice.say(text)
+
+        manager.say_hook = say_hook
         manager.start()
         try:
             yield
@@ -204,6 +221,16 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
             raise HTTPException(409, "phone not connected")
         return {"ok": True}
 
+    @app.post("/api/beds/{bed_id}/exam")
+    def start_exam(bed_id: str):
+        get_bed(bed_id)
+        return {"ok": manager.request_exam(bed_id)}
+
+    @app.post("/api/beds/{bed_id}/exam/cancel")
+    def cancel_exam(bed_id: str):
+        get_bed(bed_id)
+        return {"ok": manager.cancel_exam(bed_id)}
+
     @app.delete("/api/beds/{bed_id}")
     async def remove_bed(bed_id: str):
         bed = get_bed(bed_id)
@@ -250,9 +277,11 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
 
     def phone_status(bed: PhoneBed) -> dict:
         st = manager.bed_status(bed)
+        ex = st.get("exam") or {}
         return {"type": "status", "bed_id": bed.bed_id, "bed_name": bed.bed_name,
                 **{k: st.get(k) for k in ("state", "valid", "invalid_reason", "baseline_progress",
-                                          "fps", "prompt", "calibrating", "calibrated_range")}}
+                                          "fps", "prompt", "calibrating", "calibrated_range")},
+                "exam": {k: ex.get(k) for k in ("active", "step", "say", "label")}}
 
     @app.websocket("/api/phone/ws")
     async def phone_ws(sock: WebSocket):

@@ -1,4 +1,5 @@
-"""Video source -> MediaPipe face landmarks -> per-frame asymmetry features.
+"""Video source -> MediaPipe face landmarks -> per-frame asymmetry features (+ eye gaze),
+and MediaPipe pose landmarks -> arm/leg heights (used by the BE-FAST check, befast.py).
 
 Run on its own to see the overlay and live feature values:
     python -m strokewatch.vision --source 0
@@ -30,6 +31,18 @@ LIP_IN_TOP, LIP_IN_BOT = 13, 14
 BROW_R = [70, 63, 105, 66, 107]
 BROW_L = [300, 293, 334, 296, 336]
 KEY_POINTS = [MOUTH_R, MOUTH_L, EYE_OUT_R, EYE_OUT_L, EYE_IN_R, EYE_IN_L, *BROW_R, *BROW_L]
+# Iris centres (the face_landmarker model returns 478 points; 468-477 are the irises).
+# Which centre belongs to which eye is decided geometrically, see horizontal_gaze().
+IRIS_CENTERS = (468, 473)
+# Each eye's corners ordered from the patient's RIGHT to the patient's LEFT.
+EYE_SPANS = ((EYE_OUT_R, EYE_IN_R), (EYE_IN_L, EYE_OUT_L))
+
+# MediaPipe pose indices (patient's left/right, like the face).
+SH_L, SH_R, EL_L, EL_R, WR_L, WR_R = 11, 12, 13, 14, 15, 16
+HIP_L, HIP_R, KN_L, KN_R, AN_L, AN_R = 23, 24, 25, 26, 27, 28
+POSE_LINES = [(SH_L, SH_R), (SH_L, EL_L), (EL_L, WR_L), (SH_R, EL_R), (EL_R, WR_R),
+              (SH_L, HIP_L), (SH_R, HIP_R), (HIP_L, HIP_R), (HIP_L, KN_L), (KN_L, AN_L),
+              (HIP_R, KN_R), (KN_R, AN_R)]
 
 # OpenCV camera frame (x right, y down, z forward) <-> OpenGL frame used by the
 # MediaPipe pose matrix (x right, y up, z toward viewer).
@@ -49,6 +62,11 @@ class FrameFeatures:
     jaw_open: float | None = None
     lip_gap: float | None = None
     head_speed: float | None = None  # deg/s, from the previous frame (MotionGate)
+    # Horizontal eye position: iris offset from the middle of the eye opening, as a fraction
+    # of the eye width, averaged over both eyes. + = looking to the patient's LEFT.
+    # About +-0.15..0.25 at full sideways gaze. None if eyes closed / head turned > 30 deg.
+    gaze_h: float | None = None
+    blink: float | None = None       # max eyeBlink blendshape (eyes closed ~ > 0.5)
     valid: bool = False
     reason: str | None = None
 
@@ -110,6 +128,19 @@ def compute_features(landmarks, blendshapes, matrix, w: int, h: int, t: float, v
 
     bs = {c.category_name: c.score for c in blendshapes} if blendshapes else {}
     ff.jaw_open = round(bs.get("jawOpen", 0.0), 3)
+    blink = max(bs.get("eyeBlinkLeft", 0.0), bs.get("eyeBlinkRight", 0.0))
+    ff.blink = round(blink, 3)
+
+    # Gaze before the head-turn and talking gates: in a stroke the head often turns WITH the
+    # eyes (live test, Nov 14 2026: head 20-24 deg while holding the eyes right), and talking
+    # doesn't move the eyes. Only up to gaze_max_yaw_deg, beyond that the far eye is hidden.
+    # horizontal_gaze() is pure dot products / eye width, so in-plane rotation (roll), shift
+    # and scale cancel: raw image points give the same value as roll-levelled ones.
+    if (blink <= vc["blink_max"] and len(pts) >= 478
+            and abs(yaw) <= vc.get("gaze_max_yaw_deg", 30) and abs(pitch) <= vc["max_pitch_deg"]):
+        g = horizontal_gaze(pts[:, :2])
+        ff.gaze_h = None if g is None else round(g, 4)
+
     if abs(yaw) > vc["max_yaw_deg"]:
         ff.reason = "head turned"
         return ff
@@ -137,8 +168,7 @@ def compute_features(landmarks, blendshapes, matrix, w: int, h: int, t: float, v
     brow_h_l = eye_c_l - y[BROW_L].mean()
     ff.brow_diff = float(brow_h_r - brow_h_l)
 
-    blinking = max(bs.get("eyeBlinkLeft", 0.0), bs.get("eyeBlinkRight", 0.0)) > vc["blink_max"]
-    if blinking:
+    if blink > vc["blink_max"]:
         ff.reason = "blinking (eye feature skipped)"
     else:
         open_r = np.mean([y[b] - y[a] for a, b in EYE_LIDS_R])
@@ -199,6 +229,135 @@ class MotionGate:
             ff.valid, ff.reason = False, "head moving"
 
 
+def horizontal_gaze(p2: np.ndarray) -> float | None:
+    """Mean over both eyes of (iris centre - eye-opening middle), projected on the line from
+    the eye's patient-right corner to its patient-left corner, divided by the eye width.
+    + = looking to the patient's LEFT. Works in any in-plane rotation (pure dot products)."""
+    mids = [(p2[a] + p2[b]) / 2 for a, b in EYE_SPANS]
+    vals = []
+    for iris in IRIS_CENTERS:
+        p = p2[iris]
+        k = int(np.argmin([np.linalg.norm(p - m) for m in mids]))  # nearest eye
+        a, b = EYE_SPANS[k]
+        v = p2[b] - p2[a]
+        w2 = float(v @ v)
+        if w2 < 1e-9:
+            continue
+        vals.append(float((p - mids[k]) @ v) / w2)
+    return float(np.mean(vals)) if vals else None
+
+
+@dataclass
+class PoseFeatures:
+    """Limb heights above their root joint, in body widths (+ = higher), from MediaPipe pose.
+    'Up' is perpendicular to the shoulder line (hip line if shoulders are hidden), so a leaning
+    body doesn't look like drift. None = joint not visible."""
+    t: float
+    arm_l: float | None = None   # wrist above shoulder / shoulder width
+    arm_r: float | None = None
+    leg_l: float | None = None   # ankle above hip / body width
+    leg_r: float | None = None
+    knee_l: float | None = None  # knee above hip / body width (fallback when ankles are hidden)
+    knee_r: float | None = None
+    shoulders: bool = False
+    legs_visible: bool = False
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def compute_pose_features(landmarks, w: int, h: int, t: float, vis_min: float = 0.5
+                          ) -> PoseFeatures:
+    """Pure function (testable): pose landmarks -> PoseFeatures."""
+    xy = np.array([(p.x * w, p.y * h) for p in landmarks], dtype=float)
+
+    def ok(i: int) -> bool:
+        p = landmarks[i]
+        vis = p.visibility if getattr(p, "visibility", None) is not None else 1.0
+        return vis >= vis_min and -0.02 <= p.x <= 1.02 and -0.02 <= p.y <= 1.02
+
+    def up_and_width(a: int, b: int) -> tuple[np.ndarray, float]:
+        v = xy[a] - xy[b]
+        n = float(np.linalg.norm(v))
+        up = np.array([v[1], -v[0]]) / max(n, 1e-6)
+        if up[1] > 0:  # image y is down; 'up' must point up the image (also if mirrored)
+            up = -up
+        return up, n
+
+    pf = PoseFeatures(t=t)
+    up, width = None, None
+    if ok(SH_L) and ok(SH_R):
+        up, width = up_and_width(SH_L, SH_R)
+        if width > 1:
+            pf.shoulders = True
+            for wr, sh, attr in ((WR_L, SH_L, "arm_l"), (WR_R, SH_R, "arm_r")):
+                if ok(wr):
+                    setattr(pf, attr, round(float((xy[wr] - xy[sh]) @ up) / width, 4))
+    if ok(HIP_L) and ok(HIP_R):
+        hup, hw = up_and_width(HIP_L, HIP_R)
+        if up is None or not pf.shoulders:
+            up, width = hup, hw * 1.4  # hips are ~0.7 shoulder widths
+        if width and width > 1:
+            for j, hip, attr in ((AN_L, HIP_L, "leg_l"), (AN_R, HIP_R, "leg_r"),
+                                 (KN_L, HIP_L, "knee_l"), (KN_R, HIP_R, "knee_r")):
+                if ok(j):
+                    setattr(pf, attr, round(float((xy[j] - xy[hip]) @ up) / width, 4))
+            pf.legs_visible = all(v is not None for v in (pf.knee_l, pf.knee_r))
+    return pf
+
+
+class PoseAnalyzer:
+    """MediaPipe Pose Landmarker; only run while the BE-FAST check needs arms/legs."""
+
+    def __init__(self, cfg: dict):
+        vc = cfg["vision"]
+        path = ROOT / vc.get("pose_model_path", "models/pose_landmarker_lite.task")
+        if not path.exists():
+            raise FileNotFoundError(f"pose model missing: {path} (see README setup)")
+        self.vis_min = vc.get("pose_min_visibility", 0.5)
+        opts = mpv.PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=str(path)),
+            running_mode=mpv.RunningMode.VIDEO,
+            num_poses=1,
+        )
+        self.landmarker = mpv.PoseLandmarker.create_from_options(opts)
+        self._last_ms = -1
+
+    def process(self, frame_bgr: np.ndarray, t: float) -> tuple[PoseFeatures, np.ndarray | None]:
+        h, w = frame_bgr.shape[:2]
+        img = mp.Image(image_format=mp.ImageFormat.SRGB,
+                       data=cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
+        ms = max(int(t * 1000), self._last_ms + 1)
+        self._last_ms = ms
+        res = self.landmarker.detect_for_video(img, ms)
+        if not res.pose_landmarks:
+            return PoseFeatures(t=t), None
+        lms = res.pose_landmarks[0]
+        pf = compute_pose_features(lms, w, h, t, self.vis_min)
+        vis = [(p.visibility if p.visibility is not None else 1.0) >= self.vis_min for p in lms]
+        px = np.array([(p.x * w, p.y * h) for p in lms], dtype=np.float32)
+        px[~np.array(vis)] = np.nan
+        return pf, px
+
+    def close(self):
+        self.landmarker.close()
+
+
+def draw_pose(frame: np.ndarray, px: np.ndarray | None) -> np.ndarray:
+    """Arm/leg skeleton (in place); joints that aren't visible (NaN) are left out."""
+    if px is None:
+        return frame
+    for a, b in POSE_LINES:
+        if np.isnan(px[a]).any() or np.isnan(px[b]).any():
+            continue
+        cv2.line(frame, tuple(int(v) for v in px[a]), tuple(int(v) for v in px[b]),
+                 (240, 180, 60), 3, cv2.LINE_AA)
+    for i in (SH_L, SH_R, EL_L, EL_R, WR_L, WR_R, HIP_L, HIP_R, KN_L, KN_R, AN_L, AN_R):
+        if not np.isnan(px[i]).any():
+            cv2.circle(frame, tuple(int(v) for v in px[i]), 5, (255, 220, 120), -1, cv2.LINE_AA)
+    return frame
+
+
 class FaceAnalyzer:
     def __init__(self, cfg: dict):
         self.vc = cfg["vision"]
@@ -257,6 +416,9 @@ def draw_landmarks(frame: np.ndarray, px: np.ndarray | None, ff: FrameFeatures) 
         for a, b in [(MOUTH_R, MOUTH_L), (EYE_OUT_R, EYE_OUT_L)]:
             cv2.line(frame, tuple(int(v) for v in px[a]), tuple(int(v) for v in px[b]),
                      ok_col, 2, cv2.LINE_AA)
+        if len(px) >= 478 and ff.gaze_h is not None:
+            for i in IRIS_CENTERS:
+                cv2.circle(frame, tuple(int(v) for v in px[i]), 3, (255, 200, 0), -1, cv2.LINE_AA)
     return frame
 
 
@@ -270,6 +432,9 @@ def draw_readout(frame: np.ndarray, ff: FrameFeatures, status: dict | None = Non
     if ff.mouth_diff is not None:
         eye = f"{ff.eye_ratio:+.3f}" if ff.eye_ratio is not None else "  -  "
         lines.append(f"mouth {ff.mouth_diff:+.3f} eye {eye} brow {ff.brow_diff:+.3f}")
+    if ff.gaze_h is not None:
+        side = "L" if ff.gaze_h > 0 else "R"
+        lines.append(f"gaze {abs(ff.gaze_h):.2f} {side}")
     if ff.reason:
         lines.append(f"skip: {ff.reason}" if not ff.valid else ff.reason)
     for i, text in enumerate(lines):

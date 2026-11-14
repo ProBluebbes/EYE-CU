@@ -1,5 +1,6 @@
 // Phone camera page: camera -> (rotate, downscale) -> JPEG over a WebSocket to StrokeWatch.
-// The server sends back JSON: hello (bed + send settings), status (1/s), say (speak text).
+// The server sends back JSON: hello (bed + send settings), status (1/s), say (speak text;
+// with a "step" during a BE-FAST check, also shown big on screen for the patient).
 const $ = (id) => document.getElementById(id);
 const store = {
   get: (k, d = null) => localStorage.getItem(`sw_${k}`) ?? d,
@@ -54,11 +55,46 @@ applyRotation();
 const STATE_TEXT = { baselining: "Building baseline", monitoring: "Monitoring",
                      ALERT: "ALERT raised on dashboard", offline: "Not receiving frames", starting: "Starting" };
 
+// ---------------------------------------------------------------- big prompt box
+// Two sources share it: BE-FAST check steps (with an arrow) and the guided head-turn
+// calibration. A running check has priority; the calibration prompt comes back after it.
+// Front camera: the screen faces the patient, so "←" is the patient's own left.
+const ARROWS = { look_left: "←", look_right: "→", center: "●", arms: "↑ ↑", legs: "↑" };
+let exam = null;         // { step, text } while a check prompt is shown
+let calPrompt = null;    // current calibration prompt from the status, or null
+let promptTimer = null;  // hides the check's "done" prompt after a few seconds
+
+function renderPrompt() {
+  const p = exam || (calPrompt && { step: null, text: calPrompt });
+  $("prompt").hidden = !p;
+  $("prompt-arrow").textContent = (p && p.step && facing === "user" && ARROWS[p.step]) || "";
+  $("prompt-text").textContent = p ? p.text : "";
+}
+
+function showPrompt(step, text) {  // BE-FAST check
+  clearTimeout(promptTimer);
+  promptTimer = null;
+  exam = step ? { step, text } : null;
+  if (step === "done") promptTimer = setTimeout(() => { exam = null; promptTimer = null; renderPrompt(); }, 5000);
+  renderPrompt();
+}
+
+// Calibration prompts: shown large and spoken once each, when they change (not over a check).
+function showCalPrompt(p) {
+  calPrompt = p;
+  if (p && p !== lastPrompt && !exam) { say(p); lastPrompt = p; }
+  if (!p) lastPrompt = null;
+  renderPrompt();
+}
+
 function onStatus(m) {
+  const ex = m.exam || {};
+  if (ex.active && !exam) showPrompt(ex.step, ex.say);  // e.g. after a reconnect
+  else if (!ex.active && exam && !promptTimer) showPrompt(null);
   const name = m.bed_name ? `${m.bed_name}: ` : "";
   let text = m.calibrating ? "Calibrating" : (STATE_TEXT[m.state] || m.state);
   if (m.state === "baselining") text += ` ${Math.round((m.baseline_progress || 0) * 100)}%`;
-  showPrompt(m.prompt || null);
+  showCalPrompt(m.prompt || null);
   $("calstate").textContent = m.calibrated_range && m.state !== "baselining"
     ? `Calibrated for head turns ${m.calibrated_range[0]}° to ${m.calibrated_range[1]}°` : "";
   $("calibrate").disabled = !!m.calibrating;
@@ -69,14 +105,6 @@ function onStatus(m) {
   if (m.state === "offline" || m.state === "starting") { face.textContent = ""; return; }
   if (m.valid) { face.className = "face good"; face.textContent = "Face tracked"; }
   else { face.className = "face bad"; face.textContent = `Paused: ${m.invalid_reason || "no face"}`; }
-}
-
-// Calibration prompts: shown large and spoken once each, when they change.
-function showPrompt(p) {
-  $("prompt").hidden = !p;
-  $("prompt").textContent = p || "";
-  if (p && p !== lastPrompt) say(p);
-  lastPrompt = p;
 }
 
 // ---------------------------------------------------------------- camera
@@ -147,7 +175,7 @@ function connect() {
       document.title = `StrokeWatch: ${m.bed_name}`;
       startSending();
     } else if (m.type === "status") onStatus(m);
-    else if (m.type === "say") say(m.text);
+    else if (m.type === "say") { say(m.text); if (m.step !== undefined) showPrompt(m.step, m.text); }
   };
   sock.onclose = (e) => {
     if (ws !== sock) return;

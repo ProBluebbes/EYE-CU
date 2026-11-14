@@ -40,13 +40,21 @@ vision:
   # Frames are skipped while the head turns/tilts faster than this (deg/s): landmarks lag
   # behind a moving head, about doubling the mouth error. 0 = off.
   max_head_speed_dps: 30
+  # Gaze (BE-FAST eyes) is measured up to this head turn, separately from max_yaw_deg (it is
+  # also measured while talking): a stroke often turns the head with the eyes. Beyond ~30 deg
+  # the far eye is hidden, so this stays below max_yaw_deg.
+  gaze_max_yaw_deg: 30
   # Talking/eating -> frame skipped if the inner-lip gap at the mouth centre
   # (fraction of eye-corner distance) or the jawOpen blendshape exceeds these.
   # Don't gate on jawOpen alone: it rises with a one-sided droop too.
   lip_gap_max: 0.06
   jaw_open_max: 0.35
-  # eyeBlink blendshape above this = blinking -> eye feature skipped for that frame.
+  # eyeBlink blendshape above this = blinking -> eye feature (and gaze) skipped for that frame.
   blink_max: 0.45
+  # MediaPipe Pose model, only run during the BE-FAST check's arm/leg steps. Joints with
+  # visibility below pose_min_visibility count as "not in view".
+  pose_model_path: models/pose_landmarker_lite.task
+  pose_min_visibility: 0.5
 
 detector:
   # Seconds of VALID frames needed to build the baseline.
@@ -117,6 +125,48 @@ detector:
   alert_seconds: 6
   # Cap on time credited between two frames (so pauses/dropped frames don't count).
   max_dt: 0.25
+
+# BE-FAST "Eyes", passive (befast.GazeMonitor). gaze = iris offset from the middle of the eye
+# opening / eye width, both eyes averaged (+ = patient's left; about 0.15-0.25 at full sideways
+# gaze). Eyes held to one side for window_s -> a voice-guided check starts (see exam).
+# Calibrated Nov 14 2026 on ONE person's webcam (scripts/calibrate_gaze.py): straight ahead
+# +0.03 (steady to ~0.01), full left +0.19, full right -0.19..-0.22, i.e. ~0.16 / 0.21 from
+# centre. deviation = half of the smaller side. Re-run the script for other people/cameras.
+gaze:
+  baseline_samples: 150   # gaze samples (head facing camera) for the patient's own centre
+  center_max: 0.06        # the centre is clipped to this, so an old deviation isn't fully absorbed
+  window_s: 30            # deviation must hold this long ... (20 s: ~2.6 false/h on sim)
+  deviation: 0.08         # ... with |median - centre| at least this (~half of full sideways) ...
+  agree_fraction: 0.9     # ... and this share of samples on that side (fixed, not glancing)
+  max_yaw_deg: 30          # use gaze samples up to this head turn (= vision.gaze_max_yaw_deg)
+  max_gap_s: 10           # no gaze samples this long -> the window starts over
+
+# Voice-guided BE-FAST check (befast.ExamRunner, ~40 s): look straight/left/right, close eyes
+# + both arms out 10 s, lift both legs 5 s (only if legs are in view). Starts on a facial-droop
+# ALERT or a gaze deviation (auto), or from the bed page. The face detector pauses meanwhile.
+# Limb heights are in shoulder widths (wrist above shoulder; arms straight out ~ 0).
+# PROVISIONAL thresholds (synthetic data only).
+exam:
+  auto: true
+  cooldown_s: 300           # min gap between automatic checks for gaze deviation
+  legs: true
+  server_voice: true        # webcam beds: speak through this computer (macOS `say`)
+  alert_on_no_response: true  # no response to any instruction -> alert
+  max_gap_s: 5              # no camera frames this long -> check cancelled
+  min_samples: 5
+  head_turn_deg: 8          # head turned this far toward a look-side = eyes not judged there
+  gaze_min_excursion: 0.04  # neither direction beyond this = "eyes did not move"
+  gaze_ratio: 0.45          # weaker direction < this x stronger = can't look to that side
+  arm_raise_gain: 0.4       # wrist this much higher than at rest (while hearing the prompt) = raised
+  arm_up_min: -0.9          # if the resting height wasn't seen: wrist at least this high (vs shoulder);
+                            # live: raised -0.4..+1.0 depending on camera angle, lowered -1.3..-1.6
+  raise_asym: 0.4           # "one limb not raised" also needs this height difference
+  arm_drift: 0.20           # drop over the hold ...
+  arm_drift_asym: 0.15      # ... and this much more than the other arm = drift
+  arm_fell: -0.9            # ends below this while the other arm stays up = fell
+  leg_raise_gain: 0.20      # height gain over rest = leg raised
+  leg_drift: 0.20
+  leg_drift_asym: 0.15
 
 server:
   host: 127.0.0.1

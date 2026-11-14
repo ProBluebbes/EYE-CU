@@ -20,6 +20,8 @@ body {
 .banner.monitoring { background: var(--green); }
 .banner.ALERT { background: var(--red); animation: pulse 1s infinite alternate; }
 .banner.offline { background: #5a4a1a; }
+.banner.exam { background: #23508f; }
+.banner-sub { font-size: 20px; font-weight: 600; margin-top: 6px; opacity: 0.95; }
 @keyframes pulse { from { filter: brightness(1); } to { filter: brightness(1.35); } }
 #progress-wrap {
   height: 10px; margin-top: 12px; background: rgba(255,255,255,0.15); border-radius: 5px;
@@ -64,3 +66,28 @@ button.danger:hover { background: #7a2a2e; }
 .disclaimer { color: var(--muted); font-size: 14px; margin: 0; }
 #calibrate { background: #2a4d8f; }
 #calibrate:hover { background: #335da8; }
+
+/* BE-FAST check card */
+.exam-live { background: #1d2b45; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.exam-step { font-size: 20px; }
+.exam-bar { height: 6px; background: #2a2f3a; border-radius: 3px; margin: 8px 0 4px; overflow: hidden; }
+.exam-bar div { height: 100%; width: 0; background: #8fb4ff; transition: width 0.2s; }
+.exam-result { font-size: 16px; margin-bottom: 10px; }
+.exam-head { font-weight: 700; margin-bottom: 6px; }
+.exam-head.flagged { color: #ff8a8a; }
+.comp { display: grid; grid-template-columns: 92px 112px 1fr; gap: 8px; align-items: baseline; margin: 5px 0; font-size: 15px; }
+.comp .st { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 999px; text-align: center; background: var(--grey); }
+.st.normal { background: #1d3b2a; color: #9be3b5; }
+.st.abnormal { background: var(--red); }
+.st.no_response { background: #6b4e0f; }
+.gaze-row { display: grid; grid-template-columns: 50px 1fr 110px; align-items: center; gap: 10px; margin-top: 6px; font-size: 16px; }
+.gtrack { position: relative; height: 16px; background: #23272f; border-radius: 4px; }
+.gmid { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; background: #555; }
+.gthr { position: absolute; top: 0; bottom: 0; width: 1px; background: #7a4040; }
+.gdot { position: absolute; top: 2px; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: #4f8ef7; }
+.gdot.hot { background: var(--red); }
+.glabels { display: flex; justify-content: space-between; font-size: 12px; margin: 2px 60px 0 60px; }
+.exam-btns { display: flex; gap: 12px; margin-top: 12px; }
+.exam-btns button { flex: 1; font-size: 18px; padding: 12px; }
+#exam-start { background: #23508f; }
+#exam-start:hover { background: #2d62ad; }

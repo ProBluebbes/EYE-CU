@@ -1,7 +1,10 @@
 # StrokeWatch (hackathon MVP)
 
 Webcam monitor that alerts on a NEW one-sided facial droop, relative to the patient's own
-automatically built baseline. Hackathon demo, not a medical device.
+automatically built baseline, plus more of BE-FAST: it watches for **eyes held to one side**
+and, on a droop or a fixed gaze, runs a **voice-guided check** (look left/right, eyes closed
+with both arms out, lift both legs) that measures **gaze palsy and arm/leg drift**.
+Hackathon demo, not a medical device.
 
 ## Setup (macOS, Python 3.12, since MediaPipe has no 3.14 wheels)
 
@@ -10,7 +13,11 @@ uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 mkdir -p models && curl -L -o models/face_landmarker.task \
   https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+curl -L -o models/pose_landmarker_lite.task \
+  https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task
 ```
+
+Without the pose model everything still runs; the BE-FAST check then does only the eye steps.
 
 Grant your terminal camera access (System Settings → Privacy & Security → Camera).
 For phone cameras: `brew install cloudflared`.
@@ -61,8 +68,11 @@ through the tunnel without the key gets "Access key needed". The right-hand QR c
 dashboard on another device. Anyone with these links can see the cameras.
 
 Simulated patients (`--mock-beds N`, labelled SIM) follow scripted timelines from server start:
-new left droop at 75 s, stable, old droop worsening at 140 s, talkative, camera
-dropouts at 60–90 s, new right droop at 200 s, stable, restless (cycles beyond 8 beds).
+new left droop + weak left arm at 75 s, stable, old droop worsening at 140 s, talkative, camera
+dropouts at 60–90 s, new right droop + eyes to the left + weak right arm at 200 s, eyes held
+right + weak left arm at 110 s with a normal face (only the gaze watch catches it), restless
+(cycles beyond 8 beds). They follow the BE-FAST check's instructions, so you can watch a full
+check without a camera (or press **Run BE-FAST check** on any SIM bed page).
 Everything is in memory: a restart starts fresh.
 
 Each module runs on its own:
@@ -77,6 +87,38 @@ python scripts/synth_clip.py face.jpg clips/synth.mp4 [--pre-droop 12] # fake dr
 
 Any config value can be overridden: `--set detector.threshold=3.5 --set vision.lip_gap_max=0.08`.
 
+### BE-FAST check (eyes, arms, legs)
+
+- **Passive gaze watch.** Every frame, the horizontal eye position is measured from the iris
+  landmarks the face model already returns (iris offset from the middle of the eye opening,
+  per eye width, both eyes averaged), relative to the patient's own centre learned at start.
+  Eyes held to one side for 30 s ("gaze held to the right") start a check. In a hemispheric
+  stroke the eyes deviate toward the lesion, i.e. away from the weak side.
+- **Voice-guided check (~40 s)** starts automatically on a facial-droop ALERT or a held gaze
+  (max one gaze-triggered check per 5 min), or with **Run BE-FAST check** on the bed page:
+  1. "Keep your head still, and look straight at the camera." / "look to your left" /
+     "Now look to your right." Can't look fully to one side (gaze palsy), or eyes stay turned
+     when asked to look ahead → abnormal.
+  2. "Close your eyes. Hold both arms straight out in front of you, palms up…" (10 s, MediaPipe
+     Pose). One arm not raised, or sinking clearly more than the other (pronator-drift style)
+     → abnormal. Shown in shoulder widths; the "eyes stayed open" note checks the instruction.
+  3. "Now lift both legs up, and hold them there." (5 s) Same idea with ankles/knees. Skipped
+     automatically (nothing is said) when hips and knees weren't in view during the arm step.
+  4. No response to any instruction → "Did not follow the check's instructions" (possible
+     confusion/aphasia), which also alerts.
+- **Where the voice comes out:** phone beds speak through the phone and show the instruction
+  in large text (with ←/→ arrows for the patient's own left/right). Webcam beds speak through
+  this computer (macOS `say`; set `exam.server_voice: false` if the camera isn't next to the
+  patient). SIM beds are silent; the prompt shows on the dashboard and bed page.
+- **Results:** findings are added to the bed's open alert ("possible new LEFT facial droop" +
+  "Arm drift: left arm drifted down…", "signs point to the LEFT side"), or raise a new alert if
+  there was none. A normal check raises nothing. The bed page shows each part (normal /
+  ABNORMAL / no response / not assessed) and a live gaze bar. The face detector is paused
+  while a check runs, so deliberate eye and arm movements can't cause a droop alert.
+
+Thresholds are in `config.yaml` under `gaze:` and `exam:`. They are **provisional** (tuned on
+simulated patients and photos only), so see the tuning notes below.
+
 ## Demo script
 
 1. Sit still facing the camera; the grey banner fills over about 20 s of valid frames.
@@ -85,6 +127,10 @@ Any config value can be overridden: `--set detector.threshold=3.5 --set vision.l
    you get the red banner, "possible new LEFT/RIGHT droop", with the onset time.
 4. Reset while already drooping. The droop is absorbed into the baseline; only making it
    worse alerts.
+5. After the droop alert the voice check starts by itself. Follow it, but let one arm sink
+   during the 10 s hold: that arm's drift is added to the alert.
+6. Or, after the baseline, keep your eyes on something far to one side (head still) for
+   about 30 s: the check starts from the gaze watch alone.
 
 ## How it works
 
@@ -93,12 +139,17 @@ Any config value can be overridden: `--set detector.threshold=3.5 --set vision.l
   levelling the eye line (`2d`) and full rotation removal from MediaPipe's transformation
   matrix (`3d`)), and normalizes by the distance between the outer eye corners.
   Features (+ = patient's LEFT lower): mouth-corner height difference, log eye-opening
-  ratio, brow-height difference. Then subtracts the fake asymmetry that turning the head
-  causes (`vision.yaw_bias`, a per-feature curve over yaw fitted on recorded head-turn
-  clips). Skips frames while the head moves faster than 30°/s (landmarks lag), with the
+  ratio, brow-height difference; plus horizontal gaze from the iris landmarks (for befast.py,
+  measured up to a 30° head turn and also while talking). Also `PoseAnalyzer` (MediaPipe
+  Pose, arm/leg heights; only run during a check). Then subtracts the fake asymmetry that
+  turning the head causes (`vision.yaw_bias`, a per-feature curve over yaw fitted on
+  recorded head-turn clips). Skips frames while the head moves faster than 30°/s (landmarks lag), with the
   head turned > 40°, sideways tilt > 40°, nodded > 20°, talking
   (inner-lip gap at the mouth centre, or jawOpen > 0.35), and no face. Blinks skip only
   the eye feature.
+- **befast.py**: `GazeMonitor` (passive held-gaze detection), `ExamRunner` (the voice-guided
+  check: steps, timing on frame time, scoring), `ServerVoice` (local speaker). Self-test with
+  simulated patients: `python -m strokewatch.befast`.
 - **detector.py**: baseline = median and robust spread of `baseline_seconds` of valid
   frames (spread floored by `min_spread`). If the baseline contains head turns (a guided
   calibration, or a patient who looked around), it also learns this patient's and camera's
@@ -144,3 +195,31 @@ reports noise, angle bias and what the detector does).
   Don't gate on jawOpen alone: a one-sided droop raises it too.
 - Record clips of normal / head turns / talking / droop / droop-then-worse with
   `vision --record`, then iterate with `replay`.
+- Gaze: calibrate with `.venv/bin/python scripts/calibrate_gaze.py` (spoken prompts, ~1 min,
+  head still: straight / full left / full right). It prints the steady readings and suggests
+  `gaze.deviation` (half the smaller full-sideways reading) and `exam.gaze_min_excursion`
+  (a quarter). First calibration (one person, laptop webcam): straight +0.03, full left
+  +0.19, full right -0.20, so deviation 0.08. People's eyes moved ~2 s after a prompt
+  finished, so the check waits speech time + 2.5 s before measuring.
+- Live end-to-end test: `.venv/bin/python scripts/test_befast_live.py --trials
+  normal,weak_left,hold_right` (spoken; normal check, acted-out left weakness, held gaze).
+  First run (one person) found: looking by turning the head read as a gaze palsy (now
+  "not assessed: turned the head"), excursions were measured from the screen rather than from
+  "look straight" (fixed), and a held gaze with the head turned past 20 deg lost its gaze
+  samples (gaze is now measured up to 30 deg). The held-gaze trial wasn't flagged because the
+  eyes went back to the screen twice; still to be re-run.
+- Arms: calibrate with `.venv/bin/python scripts/calibrate_arms.py --trials steady,sink_left`
+  (runs the real arm step with spoken trials, records clips/arm_calibration.csv). The check
+  compares each wrist with its own resting height, takes the highest steady point early in
+  the hold as the start, and tracks the drop over 10 s. First live run (one person, laptop
+  webcam): arms raised 5–7 s after the prompt began; arms pointing at the camera read about
+  +1.0 (perspective, harmless); eye closure read clearly (eyeBlink ~0.8 closed vs ~0.15
+  open); pose tracking sometimes flipped between "up" and "down" within a second. So:
+  flipping tracking -> "not assessed", both arms lowered early -> "not assessed", and a
+  one-sided drift needs the other arm to stay up. A deliberate slow left-arm sink was flagged
+  ("left arm drifted down 0.31 vs -0.02"); the steady arm from the same recording scored
+  normal. Raised arms read -0.4..+1.0 and lowered ones -1.3..-1.6 depending on camera angle,
+  hence `exam.arm_up_min: -0.9` when the resting height isn't seen. Not yet seen live: a
+  steady hold with eyes closed on both arms, or anyone but one person.
+  Shoulders and hands in view, camera at chest-to-face height works best. Legs are only
+  checked if hips and knees are in view (never tested live).
