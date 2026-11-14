@@ -17,6 +17,8 @@ Endpoints
   GET  /api/beds/<id>/video       MJPEG, full size
   WS   /api/beds/<id>/ws          JSON status for one bed
   POST /api/beds/<id>/reset       rebuild baseline (closes any open alert as "reset")
+  POST /api/beds/<id>/calibrate   same, as a guided calibration (look straight, turn and hold
+                                  each side, straight again); prompts in the status
   POST /api/beds/<id>/say         {"text": ...} phone beds: speak through the phone
   DELETE /api/beds/<id>           phone beds: remove
   POST /api/alerts/<n>/ack        acknowledge (silences the alarm, bed stays in ALERT)
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import io
 from contextlib import asynccontextmanager
 
@@ -186,6 +189,12 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
         manager.reset_bed(bed_id)
         return {"ok": True}
 
+    @app.post("/api/beds/{bed_id}/calibrate")
+    def calibrate_bed(bed_id: str):
+        get_bed(bed_id)
+        manager.reset_bed(bed_id, calibrate=True)
+        return {"ok": True}
+
     @app.post("/api/beds/{bed_id}/say")
     async def say(bed_id: str, text: str = Body(..., embed=True)):
         bed = get_bed(bed_id)
@@ -243,7 +252,7 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
         st = manager.bed_status(bed)
         return {"type": "status", "bed_id": bed.bed_id, "bed_name": bed.bed_name,
                 **{k: st.get(k) for k in ("state", "valid", "invalid_reason", "baseline_progress",
-                                          "fps")}}
+                                          "fps", "prompt", "calibrating", "calibrated_range")}}
 
     @app.websocket("/api/phone/ws")
     async def phone_ws(sock: WebSocket):
@@ -288,6 +297,14 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
                 data = msg.get("bytes")
                 if data and len(data) <= MAX_FRAME_BYTES:
                     bed.push(data)
+                elif msg.get("text"):  # control messages from the phone page
+                    try:
+                        ctl = json.loads(msg["text"])
+                    except ValueError:
+                        continue
+                    if ctl.get("type") == "calibrate":
+                        manager.reset_bed(bed.bed_id, calibrate=True)
+                        await phone_send(bed, phone_status(bed))
         except (WebSocketDisconnect, RuntimeError):
             pass
         finally:

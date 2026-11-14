@@ -63,10 +63,13 @@ function render(st) {
     return;
   }
   if (st.state === "baselining") {
-    bannerText.textContent = `Building baseline… ${Math.round(st.baseline_progress * 100)}%`;
+    const pct = Math.round(st.baseline_progress * 100);
+    bannerText.textContent = st.calibrating
+      ? `Calibrating ${pct}%: ${st.prompt || ""}` : `Building baseline… ${pct}%`;
     $("progress").style.width = `${st.baseline_progress * 100}%`;
   } else if (st.state === "monitoring") {
-    bannerText.textContent = "Monitoring: no new droop";
+    const cal = st.calibrated_range ? ` (calibrated for turns ${st.calibrated_range[0]}° to ${st.calibrated_range[1]}°)` : "";
+    bannerText.textContent = `Monitoring: no new droop${cal}`;
   } else {
     const onset = st.onset_time ? fmtTime(st.onset_time) : "?";
     const ack = st.alert && st.alert.status === "acknowledged" ? " (acknowledged)" : "";
@@ -114,11 +117,13 @@ function beep() {
 }
 document.addEventListener("click", () => { audio = audio || new AudioContext(); }, { once: true });
 
-$("reset").addEventListener("click", async () => {
-  await fetch(`${API}/reset`, { method: "POST" });
+async function rebuild(action) {
+  await fetch(`${API}/${action}`, { method: "POST" });
   for (const ds of chart.data.datasets) ds.data = [];
   t0 = null; lastState = null;
-});
+}
+$("reset").addEventListener("click", () => rebuild("reset"));
+$("calibrate").addEventListener("click", () => rebuild("calibrate"));
 
 $("say-test").addEventListener("click", async () => {
   const r = await fetch(`${API}/say`, { method: "POST", headers: { "Content-Type": "application/json" },

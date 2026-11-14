@@ -10,10 +10,12 @@ camera:
 vision:
   model_path: models/face_landmarker.task
   # Head-rotation removal: "2d" levels the eye line (roll only); "3d" uses MediaPipe's
-  # transformation matrix. 2d: lower noise (0.76 vs 1.43 mm SD on a head sweep) and, after
-  # the yaw_bias correction below, the smaller worst case across devices (Nov 14 2026).
-  # Changing this needs a refit of yaw_bias (it is ignored, with a warning, otherwise).
-  correction: 2d
+  # transformation matrix; "blend" averages the two. Their head-turn errors partly cancel:
+  # worst leftover turn bias on a setup left out of the yaw_bias fit was 1.4 (blend) vs
+  # 2.3 (2d) and 2.6 (3d) points of score (Mac, iPhone, overhead clips; Nov 14 2026).
+  # Changing this needs a refit of yaw_bias and yaw_gain (yaw_bias is ignored, with a
+  # warning, otherwise).
+  correction: blend
   # Frames with the head turned/tilted further than this are skipped.
   # Yaw 40: with yaw_bias, a head held anywhere within ±40 deg gives a fake score of at
   # most ~2.3 on a device left out of the fit (threshold 4). Without it, 35 deg gave ~6.
@@ -30,11 +32,14 @@ vision:
   # Only used if `correction` matches; null = off.
   # Fitted by scripts/fit_yaw_bias.py on: macsidetoside.mov, phonesidetoside.MOV, mactilt.mov, phonetilt.MOV, tilt.mov
   yaw_bias:
-    correction: 2d
+    correction: blend
     knots: [-60, -50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50, 60]
-    mouth_diff: [0.10932, 0.08521, 0.06003, 0.04063, 0.02398, 0.00906, -0.00000, -0.00823, -0.02264, -0.04948, -0.07842, -0.10549, -0.12664]
-    eye_ratio: [-0.24357, -0.22680, -0.15830, -0.07519, -0.01730, 0.00655, 0.00000, 0.02055, 0.06917, 0.13329, 0.16698, 0.14407, 0.08559]
-    brow_diff: [-0.16800, -0.10888, -0.04865, -0.01327, -0.00600, -0.00550, 0.00000, 0.00847, 0.01444, 0.02195, 0.04056, 0.08020, 0.13422]
+    mouth_diff: [0.06741, 0.05272, 0.03632, 0.02570, 0.01796, 0.00832, 0.00000, -0.00824, -0.01971, -0.03924, -0.06043, -0.08004, -0.09576]
+    eye_ratio: [-0.22986, -0.23269, -0.17101, -0.08259, -0.01893, 0.00742, 0.00000, 0.01893, 0.06902, 0.13775, 0.17599, 0.15337, 0.08822]
+    brow_diff: [-0.12856, -0.08982, -0.04574, -0.01698, -0.00848, -0.00555, -0.00000, 0.00821, 0.01573, 0.02548, 0.04145, 0.06976, 0.10564]
+  # Frames are skipped while the head turns/tilts faster than this (deg/s): landmarks lag
+  # behind a moving head, about doubling the mouth error. 0 = off.
+  max_head_speed_dps: 30
   # Talking/eating -> frame skipped if the inner-lip gap at the mouth centre
   # (fraction of eye-corner distance) or the jawOpen blendshape exceeds these.
   # Don't gate on jawOpen alone: it rises with a one-sided droop too.
@@ -50,25 +55,37 @@ detector:
   # Floor on the robust spread (1.4826 * MAD) so a very still baseline doesn't
   # turn sub-pixel jitter into huge z-scores. Units: fraction of eye-corner distance
   # (eye_ratio is a log ratio).
-  # mouth_diff 0.006 ≈ 0.5 mm (x 90 mm eye-corner distance): the leftover error after
-  # pose matching on one recorded head sweep was ~0.45 mm (still-head noise ~0.1 mm).
-  # Threshold 4 x 0.006 ≈ 2.2 mm of lasting change. Was 0.012 (≈ 4.3 mm). Provisional.
+  # mouth_diff 0.004 ≈ 0.36 mm (x 90 mm eye-corner distance): threshold 4 ≈ 1.4 mm of
+  # tracked change. The tracker reports only ~65-75% of a real droop facing the camera, so
+  # that's ≈ 2.5 mm of real mouth-corner droop (held-angle tests, Nov 14 2026). Turned heads
+  # get more tolerance via yaw_noise. Was 0.012 (≈ 7-8 mm real). Lower = more sensitive but
+  # more false alarms from expressions; still-head noise is ~0.1 mm.
   min_spread:
-    mouth_diff: 0.012
+    mouth_diff: 0.004
     eye_ratio: 0.10
     brow_diff: 0.015
   # Safety margin for head turns: spread is widened by this much per 10 deg of yaw away
   # from the baseline's median yaw (added in quadrature), so turn bias that yaw_bias
   # doesn't fully remove (other people/cameras) fades the score instead of alerting.
   # Costs sensitivity only while the head is turned. 0 / omitted = off.
-  # Off since Nov 14 2026: together with the far-side signal loss (yaw_gain) it hid heavy
-  # droops with the head turned. With yaw_gain on and this off, a neutral face held within
-  # ±35 deg still peaks at 2.6 (device left out of the fit). Try 0.15 x min_spread
-  # (0.0018 / 0.015 / 0.00225) if other people or cameras give false alarms when turned.
+  # 0.002 for the mouth (with the 0.004 floor): a neutral face held anywhere within ±35 deg
+  # peaked at 2.4 (threshold 4) on clips from a device left out of the yaw_bias fit, while
+  # a real droop of ~2.5 mm still alerts facing the camera and ~5-6 mm when turned.
   yaw_noise:
-    mouth_diff: 0.0
+    mouth_diff: 0.002
     eye_ratio: 0.0
     brow_diff: 0.0
+  # Multiplies yaw_noise for head turns covered by the baseline (calibration): those are
+  # corrected for this patient and camera, so they need less tolerance. Provisional.
+  yaw_noise_calibrated: 0.5
+  # Guided calibration (Calibrate button): look straight for centre_s, turn to one side
+  # past turn_deg and hold for hold_s, the same to the other side, then straight again.
+  # A step is skipped after step_timeout_s.
+  calibration:
+    centre_s: 5
+    turn_deg: 15
+    hold_s: 2.5
+    step_timeout_s: 25
   # Share of a real change the landmarks still report with the head turned (yaw, deg),
   # relative to facing the camera, for a change on the patient's LEFT; a RIGHT change uses
   # the mirror image. Deviations are divided by it (clamped 0.5-2). Measured Nov 14 2026 by
@@ -76,7 +93,7 @@ detector:
   # corner averaged; the far side loses most). Mouth only; others not measured.
   yaw_gain:
     knots: [-60, -50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50, 60]
-    mouth_diff: [0.79, 0.85, 0.96, 0.99, 1.0, 1.0, 1.0, 0.97, 0.92, 0.86, 0.73, 0.6, 0.6]
+    mouth_diff: [0.60, 0.60, 0.75, 0.87, 0.96, 1.00, 1.00, 0.98, 0.90, 0.80, 0.64, 0.60, 0.60]
   # Per-feature multiplier on |z|. Mouth droop is the most reliable stroke sign.
   weights:
     mouth_diff: 1.0

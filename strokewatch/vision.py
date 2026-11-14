@@ -48,6 +48,7 @@ class FrameFeatures:
     roll: float | None = None
     jaw_open: float | None = None
     lip_gap: float | None = None
+    head_speed: float | None = None  # deg/s, from the previous frame (MotionGate)
     valid: bool = False
     reason: str | None = None
 
@@ -73,6 +74,32 @@ def euler_deg(r_gl: np.ndarray) -> tuple[float, float, float]:
     return yaw, pitch, roll
 
 
+def upright_y(pts: np.ndarray, r_gl: np.ndarray, method: str) -> np.ndarray | None:
+    """Vertical landmark positions with head rotation removed, divided by the outer
+    eye-corner distance; y down (bigger = lower on the face). None if degenerate.
+
+    "2d": level the line between the outer eye corners (removes roll only).
+    "3d": full rotation removal with MediaPipe's facial transformation matrix (its depth
+          estimates leak into y, so turning the head biases it differently from 2d).
+    "blend" (default): average of the two. Their head-turn errors partly cancel: on
+          Mac/iPhone/overhead clips the worst leftover turn bias, fitted without the
+          tested setup, was 1.4 vs 2.3 (2d) and 2.6 (3d) points of score (Nov 14 2026).
+    """
+    if method == "blend":
+        a, b = upright_y(pts, r_gl, "2d"), upright_y(pts, r_gl, "3d")
+        return None if a is None or b is None else (a + b) / 2
+    if method == "3d":
+        q = (pts - pts.mean(axis=0)) @ (_FLIP @ r_gl @ _FLIP)
+    else:
+        p2 = pts[:, :2] - pts[:, :2].mean(axis=0)
+        v = p2[EYE_OUT_L] - p2[EYE_OUT_R]
+        a = math.atan2(v[1], v[0])
+        c, s = math.cos(a), math.sin(a)
+        q = p2 @ np.array([[c, -s], [s, c]])  # rotate by -a: eye line becomes horizontal
+    iod = float(np.linalg.norm(q[EYE_OUT_L] - q[EYE_OUT_R]))
+    return None if iod < 1e-6 else q[:, 1] / iod
+
+
 def compute_features(landmarks, blendshapes, matrix, w: int, h: int, t: float, vc: dict
                      ) -> FrameFeatures:
     """Features from one face's landmarks. Pure function so it can be unit-tested."""
@@ -90,26 +117,10 @@ def compute_features(landmarks, blendshapes, matrix, w: int, h: int, t: float, v
         ff.reason = "head tilted"
         return ff
 
-    # Undo head rotation, y down.
-    # "2d" (default): only level the line between the outer eye corners (removes roll).
-    #   On one recorded head sweep (Nov 13, 2026) this halved the turn-induced error vs
-    #   "3d", because MediaPipe's depth estimates leak into y. Remaining turn/nod bias is
-    #   handled by the pose-matched baseline in detector.py.
-    # "3d": full rotation removal using the facial transformation matrix.
-    if vc.get("correction", "2d") == "3d":
-        r_cv = _FLIP @ r_gl @ _FLIP
-        q = (pts - pts.mean(axis=0)) @ r_cv
-    else:
-        p2 = pts[:, :2] - pts[:, :2].mean(axis=0)
-        v = p2[EYE_OUT_L] - p2[EYE_OUT_R]
-        a = math.atan2(v[1], v[0])
-        c, s = math.cos(a), math.sin(a)
-        q = p2 @ np.array([[c, -s], [s, c]])  # rotate by -a: eye line becomes horizontal
-    iod = float(np.linalg.norm(q[EYE_OUT_L] - q[EYE_OUT_R]))
-    if iod < 1e-6:
+    y = upright_y(pts, r_gl, vc.get("correction", "blend"))
+    if y is None:
         ff.reason = "no face"
         return ff
-    y = q[:, 1] / iod  # normalized, y down (bigger = lower on the face)
 
     # Talking gate: inner-lip gap at the mouth CENTER (a droop moves the corner, not
     # the center), plus jawOpen as a loose backstop. jawOpen alone rises with a droop.
@@ -145,7 +156,7 @@ YAW_BIAS_FEATURES = ("mouth_diff", "eye_ratio", "brow_diff")
 def yaw_bias_table(vc: dict) -> dict | None:
     """The vision.yaw_bias table if it applies to the configured correction, else None."""
     tb = vc.get("yaw_bias")
-    if not tb or tb.get("correction") != vc.get("correction", "2d"):
+    if not tb or tb.get("correction") != vc.get("correction", "blend"):
         return None
     return tb
 
@@ -162,6 +173,32 @@ def remove_yaw_bias(ff: FrameFeatures, vc: dict) -> None:
             setattr(ff, f, v - float(np.interp(ff.yaw, tb["knots"], tb[f])))
 
 
+class MotionGate:
+    """Skips frames while the head is turning/tilting faster than max_dps (deg/s).
+    Landmarks lag behind a moving head, so moving frames carry about twice the mouth error
+    of still ones (Nov 14 2026 clips: 90th percentile 1.2-1.8 mm above 50 deg/s vs 0.45-0.9 mm
+    below 10). A resting patient loses almost nothing. 0 = off."""
+
+    def __init__(self, max_dps: float):
+        self.max_dps = max_dps or 0.0
+        self.reset()
+
+    def reset(self):
+        self.prev: tuple[float, float, float, float] | None = None  # t, yaw, pitch, roll
+
+    def apply(self, ff: FrameFeatures) -> None:
+        if not self.max_dps or ff.yaw is None:
+            return
+        cur = (ff.t, ff.yaw, ff.pitch or 0.0, ff.roll or 0.0)
+        prev, self.prev = self.prev, cur
+        if prev is None or cur[0] - prev[0] <= 0 or cur[0] - prev[0] > 1.0:
+            return
+        speed = max(abs(a - b) for a, b in zip(cur[1:], prev[1:])) / (cur[0] - prev[0])
+        ff.head_speed = round(speed, 1)
+        if speed > self.max_dps and ff.valid:
+            ff.valid, ff.reason = False, "head moving"
+
+
 class FaceAnalyzer:
     def __init__(self, cfg: dict):
         self.vc = cfg["vision"]
@@ -174,6 +211,7 @@ class FaceAnalyzer:
         )
         self.landmarker = mpv.FaceLandmarker.create_from_options(opts)
         self._last_ms = -1
+        self._motion = MotionGate(self.vc.get("max_head_speed_dps", 0))
         if self.vc.get("yaw_bias") and yaw_bias_table(self.vc) is None:
             print(f"warning: vision.yaw_bias was fitted for correction "
                   f"{self.vc['yaw_bias'].get('correction')!r}, not {self.vc.get('correction')!r}; "
@@ -188,10 +226,12 @@ class FaceAnalyzer:
         self._last_ms = ms
         res = self.landmarker.detect_for_video(img, ms)
         if not res.face_landmarks:
+            self._motion.reset()
             return FrameFeatures(t=t, reason="no face"), None
         lms = res.face_landmarks[0]
         ff = compute_features(lms, res.face_blendshapes[0] if res.face_blendshapes else None,
                               res.facial_transformation_matrixes[0], w, h, t, self.vc)
+        self._motion.apply(ff)
         px = np.array([(p.x * w, p.y * h) for p in lms], dtype=np.float32)
         return ff, px
 

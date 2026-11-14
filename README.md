@@ -89,19 +89,26 @@ Any config value can be overridden: `--set detector.threshold=3.5 --set vision.l
 ## How it works
 
 - **vision.py**: MediaPipe Face Landmarker. Rotates frames by the camera mount angle
-  (`camera.rotate`), then removes head tilt by levelling the line between the outer
-  eye corners (`vision.correction: 2d`; `3d` = full rotation removal from MediaPipe's
-  transformation matrix), and normalizes by the distance between the outer eye corners.
+  (`camera.rotate`), then removes head rotation (`vision.correction: blend` = average of
+  levelling the eye line (`2d`) and full rotation removal from MediaPipe's transformation
+  matrix (`3d`)), and normalizes by the distance between the outer eye corners.
   Features (+ = patient's LEFT lower): mouth-corner height difference, log eye-opening
   ratio, brow-height difference. Then subtracts the fake asymmetry that turning the head
   causes (`vision.yaw_bias`, a per-feature curve over yaw fitted on recorded head-turn
-  clips). Skips frames with the head turned > 40°, sideways tilt > 40°, nodded > 20°, talking
+  clips). Skips frames while the head moves faster than 30°/s (landmarks lag), with the
+  head turned > 40°, sideways tilt > 40°, nodded > 20°, talking
   (inner-lip gap at the mouth centre, or jawOpen > 0.35), and no face. Blinks skip only
   the eye feature.
 - **detector.py**: baseline = median and robust spread of `baseline_seconds` of valid
-  frames (spread floored by `min_spread`). With the head turned, the landmarks follow a
-  droop less (mostly on the far side), so the mouth deviation is scaled back up by the
-  measured loss (`yaw_gain`). `yaw_noise` (off) can widen the spread with turn instead.
+  frames (spread floored by `min_spread`). If the baseline contains head turns (a guided
+  calibration, or a patient who looked around), it also learns this patient's and camera's
+  leftover turn bias. With the head turned, the landmarks follow a droop less (mostly on
+  the far side), so the mouth deviation is scaled back up by the measured loss
+  (`yaw_gain`), and the spread widens a little with the turn (`yaw_noise`, halved for
+  turns the calibration covered).
+- **Calibration (optional)**: "Calibrate head turns" on the phone camera page or the bed
+  page rebuilds the baseline with spoken/shown prompts: look straight, turn to one side
+  and hold, the other side and hold, straight again (about 15-30 s).
   Optional pose-matched baseline (`pose_match_deg`, off by default): compare only with
   baseline frames at a similar angle.
   Then weighted robust z per feature, EWMA-smoothed, score = max |z|. ALERT when
@@ -124,8 +131,10 @@ provisional changes. Measure a clip with
 `.venv/bin/python scripts/mapping_report.py clips/X.mov` (finds the rotation itself, and
 reports noise, angle bias and what the detector does).
 
-- Score scale: with `min_spread.mouth_diff: 0.012`, threshold 4 ≈ a 0.048 change in
-  mouth_diff ≈ 4.3 mm at the corner on an adult face (from one person's clips).
+- Score scale: with `min_spread.mouth_diff: 0.004`, threshold 4 ≈ a 0.016 change in
+  mouth_diff ≈ 1.4 mm as tracked. The tracker reports only ~65-75% of a real droop, so
+  that's ≈ 2.5 mm of real mouth-corner droop facing the camera; ≈ 5-6 mm with the head
+  turned up to 35° without calibration (one person's clips).
 - Head-turn bias: record neutral-face clips turning slowly left-right past 40° on each
   device/camera position, then refit and paste the printed block into `config.yaml`:
   `.venv/bin/python scripts/fit_yaw_bias.py clips/*.mov clips/*.MOV`. It also prints how

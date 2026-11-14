@@ -53,13 +53,16 @@ class Bed(threading.Thread):
         self._next_thumb = 0.0
         self._full_wanted_until = 0.0
         self._reset = threading.Event()
+        self._calibrate = False
         self._stop_evt = threading.Event()
         self._jpeg_q = [int(cv2.IMWRITE_JPEG_QUALITY), cfg["server"]["jpeg_quality"]]
         self._thumb_q = [int(cv2.IMWRITE_JPEG_QUALITY), 60]
 
     # ------------------------------------------------------------ control (any thread)
-    def reset(self):
-        """Rebuild the baseline (applied by the worker thread on its next frame)."""
+    def reset(self, calibrate: bool = False):
+        """Rebuild the baseline (applied by the worker thread on its next frame).
+        calibrate=True: guided baseline with head turns (prompts in the status)."""
+        self._calibrate = calibrate
         self._reset.set()
 
     def stop(self, timeout: float = 2.0):
@@ -104,7 +107,7 @@ class Bed(threading.Thread):
     def _process(self, frame: np.ndarray, ff: FrameFeatures, px: np.ndarray | None):
         if self._reset.is_set():
             self._reset.clear()
-            self.detector.reset()
+            self.detector.reset(calibrate=self._calibrate)
         prev_state = self.detector.state
         st = self.detector.update(ff).to_dict()
         now = time.monotonic()
@@ -366,7 +369,7 @@ class BedManager:
             bed.reset()
         return True
 
-    def reset_bed(self, bed_id: str) -> bool:
+    def reset_bed(self, bed_id: str, calibrate: bool = False) -> bool:
         bed = self.beds.get(bed_id)
         if bed is None:
             return False
@@ -374,7 +377,7 @@ class BedManager:
             for a in self.alerts:
                 if a.bed_id == bed_id and a.status != "resolved":
                     self._close(a, "reset")
-        bed.reset()
+        bed.reset(calibrate=calibrate)
         return True
 
     @staticmethod

@@ -283,6 +283,50 @@ Next step: learn the leftover bias per patient from the baseline when it contain
 turns. Record more people and setups and refit with
 `scripts/fit_yaw_bias.py`.
 
+## 8. Sensitivity, motion gate, blend and calibration (Nov 14, 2026, later)
+
+**Problem:** the alert level was set by `min_spread.mouth_diff: 0.012` (the MVP revert):
+≈ 4.3 mm as tracked, and because the tracker reports only 0.61–0.77 of a real droop
+facing the camera (warp test, blend), **≈ 7–8 mm of real droop**. Far too coarse.
+
+**Findings:**
+- **Motion matters.** In the turn clips most frames move faster than 50°/s. Mouth error
+  (90th percentile) was 1.2–1.8 mm above 50°/s against 0.45–0.9 mm below 10°/s:
+  landmarks lag behind a moving head. The leftover turn bias at the same angle also
+  differed between clip halves (up to 1.5 mm) and between turn directions.
+- **2d + 3d average ("blend")** cancels part of the turn bias: worst leftover with the
+  setup left out of the fit 1.4 vs 2.3 (2d) and 2.6 (3d) points. Making the bias depend
+  on pitch overfit (3.5–4.1).
+- Per-session calibration couldn't be validated on these sweep clips (no held turned
+  frames). On synthetic data with a strong bias it brings a held turned neutral face to
+  < 0.6 and catches a 1.8 mm (tracked) droop at 15–22°.
+
+**Changes:**
+
+| Change | Setting | Revert with |
+|---|---|---|
+| Skip frames while the head moves > 30°/s | `vision.max_head_speed_dps: 30` | 0 |
+| 2d/3d average, yaw_bias and yaw_gain refit for it | `vision.correction: blend` | `2d` + old tables |
+| Mouth floor 0.012 → 0.004 | `detector.min_spread.mouth_diff` | 0.012 |
+| Turn tolerance on again, 0.002 per 10°; halved for calibrated turns | `detector.yaw_noise`, `yaw_noise_calibrated` | 0 |
+| Per-session turn correction learned from the baseline when it contains turns | detector (`SESSION_*`) | — |
+| Guided calibration button (phone page, bed page) | `detector.calibration` | don't press it |
+
+**Held-angle test** (device left out of the yaw_bias fit, droop scaled by the measured
+tracker loss for that device and side, motion gate on), real droop needed to alert:
+
+| | Before (0.012, no gate) | Now |
+|---|---|---|
+| Facing the camera (median / worst clip) | 8 / 8 mm | **2.5 / 4 mm** |
+| Head turned up to ±15° (worst) | > 8 mm | 5 mm |
+| Up to ±35° (worst) | > 8 mm | 6 mm |
+| Neutral face held, worst score (threshold 4) | 2.9 | 2.4 |
+
+The worst-case numbers come from sweep clips where the baseline itself had to be built
+from moving frames, so they're pessimistic. **Next:** record neutral-face clips that
+**hold** the head still at about ±15° and ±30° for 3–5 s each (and a held mild droop),
+to measure the turned case properly and validate calibration on real data.
+
 ## Sources
 
 From web searches, Nov 2026:

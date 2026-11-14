@@ -19,6 +19,7 @@ let cfg = { send_fps: 10, max_side: 640, jpeg_quality: 0.7 };
 let stream = null, ws = null, running = false, busy = false;
 let sendTimer = null, retryTimer = null, wakeLock = null, failures = 0;
 const sentTimes = [];
+let lastPrompt = null;
 const canvas = document.createElement("canvas");
 const g = canvas.getContext("2d");
 $("name").value = store.get("name", "");
@@ -55,8 +56,12 @@ const STATE_TEXT = { baselining: "Building baseline", monitoring: "Monitoring",
 
 function onStatus(m) {
   const name = m.bed_name ? `${m.bed_name}: ` : "";
-  let text = STATE_TEXT[m.state] || m.state;
+  let text = m.calibrating ? "Calibrating" : (STATE_TEXT[m.state] || m.state);
   if (m.state === "baselining") text += ` ${Math.round((m.baseline_progress || 0) * 100)}%`;
+  showPrompt(m.prompt || null);
+  $("calstate").textContent = m.calibrated_range && m.state !== "baselining"
+    ? `Calibrated for head turns ${m.calibrated_range[0]}° to ${m.calibrated_range[1]}°` : "";
+  $("calibrate").disabled = !!m.calibrating;
   setState(m.state, name + text);
   $("bar").hidden = m.state !== "baselining";
   $("bar").firstElementChild.style.width = `${(m.baseline_progress || 0) * 100}%`;
@@ -64,6 +69,14 @@ function onStatus(m) {
   if (m.state === "offline" || m.state === "starting") { face.textContent = ""; return; }
   if (m.valid) { face.className = "face good"; face.textContent = "Face tracked"; }
   else { face.className = "face bad"; face.textContent = `Paused: ${m.invalid_reason || "no face"}`; }
+}
+
+// Calibration prompts: shown large and spoken once each, when they change.
+function showPrompt(p) {
+  $("prompt").hidden = !p;
+  $("prompt").textContent = p || "";
+  if (p && p !== lastPrompt) say(p);
+  lastPrompt = p;
 }
 
 // ---------------------------------------------------------------- camera
@@ -203,6 +216,12 @@ $("flip").onclick = async () => {
   try { await startCamera(); } catch (e) { showMsg(`Could not switch camera (${e.name}).`, true); }
 };
 $("voice").onclick = () => say("This is a voice test from StrokeWatch.");
+$("calibrate").onclick = () => {
+  if (!ws || ws.readyState !== 1) { showMsg("Not connected to StrokeWatch yet.", true); return; }
+  say("Calibration starting.");  // inside the tap, so iOS allows the spoken prompts that follow
+  lastPrompt = null;
+  ws.send(JSON.stringify({ type: "calibrate" }));
+};
 $("stop").onclick = () => {
   stopAll();
   showMsg("Stopped. This bed shows as offline on the dashboard until you start again.");

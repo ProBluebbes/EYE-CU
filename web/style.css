@@ -62,3 +62,5 @@ button:hover { background: #3a4252; }
 button.danger { background: #5c1f22; }
 button.danger:hover { background: #7a2a2e; }
 .disclaimer { color: var(--muted); font-size: 14px; margin: 0; }
+#calibrate { background: #2a4d8f; }
+#calibrate:hover { background: #335da8; }
