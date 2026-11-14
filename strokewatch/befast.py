@@ -52,7 +52,8 @@ EXAM_DEFAULTS = {
     "gaze_min_excursion": 0.04,   # weaker of the two directions below this x stronger = palsy
     "gaze_ratio": 0.45,
     "arm_raise_gain": 0.4,        # wrist this much higher (shoulder widths) than at rest = raised
-    "arm_up_min": -0.3,           # if the resting height wasn't seen: wrist at least this high
+    "arm_up_min": -0.9,           # if the resting height wasn't seen: wrist at least this high
+                                  # (live: raised -0.4..+1.0 by camera angle, lowered -1.3..-1.6)
     "raise_asym": 0.4,            # "one limb not raised" needs this height difference too
     "arm_drift": 0.20,            # drop over the hold (shoulder widths) ...
     "arm_drift_asym": 0.15,       # ... and this much more than the other arm
@@ -359,9 +360,10 @@ class ExamRunner:
 
     @staticmethod
     def _start_end(series: list[tuple[float, float]]) -> tuple[float, float]:
-        """Start = highest 1-s median in the first 4 s (people are often still raising the limb
+        """Start = highest 2-s median in the first 4 s (people are often still raising the limb
         when measuring starts: seen on the first live run, Nov 14 2026, so a rise-then-sink
-        would net to zero). End = median of the last 2 s. Short series: first/last third."""
+        would net to zero; 2-s windows keep the max of noisy medians from inflating the
+        start). End = median of the last 2 s. Short series: first/last third."""
         ts = np.array([t for t, _ in series])
         hs = np.array([h for _, h in series])
         last = ts >= ts[-1] - 2.0
@@ -369,8 +371,8 @@ class ExamRunner:
         if early.sum() < 3 or last.sum() < 3:
             k = max(1, len(hs) // 3)
             return float(np.median(hs[:k])), float(np.median(hs[-k:]))
-        peaks = [np.median(hs[(ts >= t) & (ts <= t + 1.0)]) for t in ts[early]
-                 if ((ts >= t) & (ts <= t + 1.0)).sum() >= 3]
+        peaks = [np.median(hs[(ts >= t) & (ts <= t + 2.0)]) for t in ts[early]
+                 if t + 2.0 <= ts[-1] and ((ts >= t) & (ts <= t + 2.0)).sum() >= 3]
         start = float(max(peaks)) if peaks else float(np.median(hs[early]))
         return start, float(np.median(hs[last]))
 

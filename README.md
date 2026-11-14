@@ -191,6 +191,10 @@ reports noise, angle bias and what the detector does).
   +1.0 (perspective, harmless); eye closure read clearly (eyeBlink ~0.8 closed vs ~0.15
   open); pose tracking sometimes flipped between "up" and "down" within a second. So:
   flipping tracking -> "not assessed", both arms lowered early -> "not assessed", and a
-  one-sided drift needs the other arm to stay up. Not yet seen live: a clean one-arm sink.
+  one-sided drift needs the other arm to stay up. A deliberate slow left-arm sink was flagged
+  ("left arm drifted down 0.31 vs -0.02"); the steady arm from the same recording scored
+  normal. Raised arms read -0.4..+1.0 and lowered ones -1.3..-1.6 depending on camera angle,
+  hence `exam.arm_up_min: -0.9` when the resting height isn't seen. Not yet seen live: a
+  steady hold with eyes closed on both arms, or anyone but one person.
   Shoulders and hands in view, camera at chest-to-face height works best. Legs are only
   checked if hips and knees are in view (never tested live).
