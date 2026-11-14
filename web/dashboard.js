@@ -54,14 +54,22 @@ function makeTile(bed) {
 
 const PILL = { starting: "Starting", baselining: "Baseline", monitoring: "Monitoring",
                ALERT: "ALERT", offline: "Offline" };
+const stripTag = (f) => f.replace(/^Face: /, "");
+// One line for an alert: "possible new LEFT facial droop" or "Arm drift: left arm … (+1 more)".
+function alertHeadline(a) {
+  const f = a.findings && a.findings.length ? a.findings : [`Face: possible new ${a.side} facial droop`];
+  return stripTag(f[0]) + (f.length > 1 ? ` (+${f.length - 1} more)` : "");
+}
 const SCALE = 1.5; // score bar spans 0 .. 1.5 x threshold
 
 function renderTile(bed) {
   const t = tiles.get(bed.bed_id) || makeTile(bed);
   t.name.textContent = bed.bed_name;
   const acked = bed.alert && bed.alert.status === "acknowledged";
-  t.el.className = `tile state-${bed.state}${acked ? " acked" : ""}`;
-  t.pill.textContent = acked ? "ALERT (ack)" : PILL[bed.state] || bed.state;
+  const exam = bed.exam && bed.exam.active;
+  t.el.className = `tile state-${bed.state}${acked ? " acked" : ""}${exam ? " exam" : ""}`;
+  t.pill.textContent = acked ? "ALERT (ack)" : exam && bed.state !== "ALERT" ? "BE-FAST check"
+    : PILL[bed.state] || bed.state;
 
   t.overlay.hidden = bed.state !== "offline";
   if (bed.state === "offline") {
@@ -71,7 +79,13 @@ function renderTile(bed) {
   }
 
   // status line
-  if (bed.state === "ALERT") {
+  if (exam) {
+    t.status.textContent = `Check ${bed.exam.index}/${bed.exam.count}: ${bed.exam.label}`;
+  } else if (bed.state === "ALERT" && bed.alert) {
+    const onset = bed.alert.onset_time ? fmtTime(bed.alert.onset_time) : "?";
+    const h = alertHeadline(bed.alert);
+    t.status.textContent = `${h.charAt(0).toUpperCase()}${h.slice(1)} · onset ${onset}`;
+  } else if (bed.state === "ALERT") {
     const onset = bed.onset_time ? fmtTime(bed.onset_time) : "?";
     t.status.textContent = `Possible new ${bed.side} facial droop · onset ${onset}`;
   } else if (bed.state === "baselining") {
@@ -105,6 +119,11 @@ function renderTile(bed) {
   if (bed.state !== "offline" && bed.state !== "starting") {
     if (!bed.valid && bed.invalid_reason) parts.push(`paused: ${bed.invalid_reason}`);
     else parts.push("tracking face");
+    if (bed.gaze && bed.gaze.deviation) parts.push(`gaze held ${bed.gaze.deviation}`);
+    const le = bed.last_exam;
+    if (!exam && le && !le.cancelled && serverNow() - le.finished_at < 1800) {
+      parts.push(le.flagged ? `check ${fmtTime(le.finished_at)}: abnormal` : `check ${fmtTime(le.finished_at)}: normal`);
+    }
   }
   if (bed.fps && bed.state !== "offline") parts.push(`${bed.fps} fps`);
   t.sub.textContent = parts.join(" · ");
@@ -132,7 +151,7 @@ function renderAlerts(alerts) {
   const active = alerts.filter((a) => a.status === "active").length;
   $("alert-count").textContent = open.length ? `${open.length} open${active ? `, ${active} unacknowledged` : ""}` : "";
 
-  const sig = JSON.stringify(alerts.map((a) => [a.id, a.status]));
+  const sig = JSON.stringify(alerts.map((a) => [a.id, a.status, (a.findings || []).length]));
   if (sig !== alertSig) {
     alertSig = sig;
     const list = $("alert-list");
@@ -149,13 +168,19 @@ function alertItem(a) {
   const box = el("div", `alert-item ${a.status}`);
   const title = el("a", "alert-title");
   title.href = `/bed/${encodeURIComponent(a.bed_id)}`;
-  title.textContent = `${a.bed_name}: possible new ${a.side} facial droop`;
+  title.textContent = `${a.bed_name}: ${alertHeadline(a)}`;
   const meta = el("div", "alert-meta");
   meta.append(`onset ${a.onset_time ? fmtTime(a.onset_time) : "?"} · raised ${fmtTime(a.raised_at)} (`);
   const agoSpan = el("span", null, ago(a.raised_at));
   agoSpan.dataset.ago = a.raised_at;
   meta.append(agoSpan, ")");
   box.append(title, meta);
+  if (a.findings && a.findings.length > 1) {
+    const ul = el("ul", "alert-findings");
+    for (const f of a.findings) ul.append(el("li", null, stripTag(f)));
+    box.append(ul);
+  }
+  if (a.side && a.findings && a.findings.length > 1) box.append(el("div", "alert-meta", `signs point to the ${a.side} side`));
 
   if (a.status === "acknowledged") box.append(el("div", "alert-meta", `acknowledged ${fmtTime(a.acked_at)}`));
   if (a.status === "resolved") {

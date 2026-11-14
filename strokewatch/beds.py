@@ -1,25 +1,30 @@
 """Multi-bed core: one worker thread per bed + a manager that tracks alerts. All in memory.
 
 Bed (thread): frames -> features -> Detector -> latest status, full-size JPEG (bed page)
-and a small thumbnail JPEG (dashboard grid).
+and a small thumbnail JPEG (dashboard grid). Also the BE-FAST extras (befast.py): a passive
+GazeMonitor, and a voice-guided ExamRunner started on a facial-droop ALERT, a gaze deviation
+or by staff. The face detector is paused while a check runs.
   CameraBed: webcam index, video file or RTSP URL (anything cv2.VideoCapture opens).
   PhoneBed:  JPEG frames pushed by a phone's browser (web/phone.html) over a WebSocket.
   SimBed:    scripted patient from mock.py, no camera.
 BedManager: owns the beds, raises an Alert when a bed enters ALERT, handles
-acknowledge / resolve / reset, and builds the dashboard snapshot.
+acknowledge / resolve / reset, attaches BE-FAST check results to alerts (or raises one),
+and builds the dashboard snapshot.
 """
 from __future__ import annotations
 
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import cv2
 import numpy as np
 
+from .befast import ExamRunner, GazeMonitor, exam_cfg
 from .detector import Detector
 from .mock import SimScenario
-from .vision import FaceAnalyzer, FrameFeatures, VideoSource, draw_landmarks, draw_readout
+from .vision import (FaceAnalyzer, FrameFeatures, PoseAnalyzer, PoseFeatures, VideoSource,
+                     draw_landmarks, draw_pose, draw_readout)
 
 BED_DEFAULTS = {"analysis_fps": 15, "sim_fps": 10, "thumb_fps": 4, "thumb_width": 320,
                 "offline_after_s": 3.0}
@@ -40,6 +45,17 @@ class Bed(threading.Thread):
         self.interval = 1.0 / fps
         self.detector = Detector(cfg)
         self.on_alert = None  # set by BedManager: fn(bed, status_dict)
+        self.on_say = None    # set by BedManager: fn(bed, text, step_key) -> speak to the patient
+        self.on_exam_done = None  # set by BedManager: fn(bed, result_dict)
+        self.ec = exam_cfg(cfg)
+        self.gaze = GazeMonitor(cfg)
+        self.exam: ExamRunner | None = None
+        self.last_exam: dict | None = None
+        self._exam_req: tuple[str, str] | None = None  # ("start", trigger) | ("cancel", why)
+        self._next_auto_exam = 0.0     # frame time; gaze-triggered checks wait for this
+        self._alert_exam_done = False  # one automatic check per facial-droop ALERT
+        self._pose: PoseAnalyzer | None = None
+        self._pose_error: str | None = None
         self.lock = threading.Lock()
         self.frame_id = 0
         self.jpeg: bytes | None = None
@@ -69,6 +85,13 @@ class Bed(threading.Thread):
         else:
             self.close()
 
+    def request_exam(self, trigger: str = "requested by staff"):
+        """Start a BE-FAST check on the next frame (any thread)."""
+        self._exam_req = ("start", trigger)
+
+    def cancel_exam(self, why: str = "cancelled by staff"):
+        self._exam_req = ("cancel", why)
+
     def want_full_frames(self):
         """Called by bed-page video streams; full-size JPEGs are only encoded while wanted."""
         self._full_wanted_until = time.monotonic() + FULL_FRAME_IDLE_S
@@ -87,7 +110,80 @@ class Bed(threading.Thread):
         raise NotImplementedError
 
     def close(self):
-        pass
+        if self._pose is not None:
+            self._pose.close()
+            self._pose = None
+
+    def pose_features(self, frame: np.ndarray, t: float
+                      ) -> tuple[PoseFeatures | None, np.ndarray | None]:
+        """Arm/leg heights for the BE-FAST check. The pose model is loaded on first use."""
+        if self._pose is None and self._pose_error is None:
+            try:
+                self._pose = PoseAnalyzer(self.cfg)
+            except Exception as e:  # missing model file etc.: check runs without arms/legs
+                self._pose_error = str(e)
+                print(f"{self.bed_name}: pose analysis unavailable: {e}")
+        if self._pose is None:
+            return None, None
+        return self._pose.process(frame, t)
+
+    def pose_problem(self) -> str | None:
+        """Why arms/legs can't be checked (None = fine). Loads the model if needed."""
+        if self._pose is None and self._pose_error is None:
+            self.pose_features(np.zeros((64, 64, 3), np.uint8), 0.0)
+        return self._pose_error
+
+    # ------------------------------------------------------------ BE-FAST check
+    def _say(self, text: str, step: str | None):
+        if self.on_say and text:
+            try:
+                self.on_say(self, text, step)
+            except Exception as e:  # speech is best-effort; never kill the bed thread
+                print(f"{self.bed_name}: could not speak: {e}")
+
+    def _start_exam(self, trigger: str, t: float):
+        self.exam = ExamRunner(self.cfg, trigger, gaze_center=self.gaze.center,
+                               pose_error=self.pose_problem())
+        print(f"{self.bed_name}: BE-FAST check started ({trigger})")
+
+    def _exam_tick(self, frame: np.ndarray, ff: FrameFeatures, det_state: str):
+        """Handle staff requests and automatic triggers, then advance a running check.
+        Returns pose landmark px to draw (or None)."""
+        req, self._exam_req = self._exam_req, None
+        if req and req[0] == "cancel" and self.exam:
+            self.exam.cancel(req[1])
+            self._say("The check was stopped.", None)
+        elif req and req[0] == "start" and self.exam is None:
+            self._start_exam(req[1], ff.t)
+        if self.exam is None and self.ec["auto"]:
+            if det_state == "ALERT" and not self._alert_exam_done:
+                self._alert_exam_done = True
+                self._start_exam(f"facial droop ({self.detector.side})", ff.t)
+            elif (self.gaze.deviation and det_state != "baselining"
+                  and ff.t >= self._next_auto_exam):
+                self._start_exam(f"gaze held to the {self.gaze.deviation.lower()}", ff.t)
+        ex, ppx = self.exam, None
+        if ex is None:
+            return None
+        pose = None
+        if ex.needs_pose:
+            pose, ppx = self.pose_features(frame, ff.t)
+        for text in ex.update(ff, pose):
+            self._say(text, ex.step.key if ex.step and not ex.finished else "done")
+        if ex.finished:
+            self.exam = None
+            self._next_auto_exam = ff.t + self.ec["cooldown_s"]
+            self.gaze.clear_window()
+            if ex.result is not None:
+                self.last_exam = ex.result
+                print(f"{self.bed_name}: BE-FAST check done: {ex.result['summary']}")
+                if self.on_exam_done:
+                    self.on_exam_done(self, ex.result)
+            else:
+                self.last_exam = {"cancelled": ex.cancelled, "trigger": ex.trigger,
+                                  "started_at": ex.started_at, "finished_at": ff.t,
+                                  "summary": f"Check stopped: {ex.cancelled}"}
+        return ppx
 
     # ------------------------------------------------------------ worker
     def run(self):
@@ -105,17 +201,34 @@ class Bed(threading.Thread):
         if self._reset.is_set():
             self._reset.clear()
             self.detector.reset()
+            self.gaze.reset()
+            if self.exam:
+                self.exam.cancel("bed reset")
+                self.exam = None
+            self._alert_exam_done = False
+            self._next_auto_exam = 0.0
         prev_state = self.detector.state
-        st = self.detector.update(ff).to_dict()
+        ppx = self._exam_tick(frame, ff, prev_state)
+        if self.exam is not None:  # deliberate eye/arm movements: pause the face detector
+            st = self.detector.update(FrameFeatures(t=ff.t, reason="BE-FAST check running")
+                                      ).to_dict()
+        else:
+            st = self.detector.update(ff).to_dict()
+            self.gaze.update(ff)
         now = time.monotonic()
         if self._last_loop is not None:
             self.fps = 0.9 * self.fps + 0.1 / max(now - self._last_loop, 1e-3)
         self._last_loop = now
         st["fps"] = round(self.fps, 1)
         st["features"] = {k: getattr(ff, k) for k in
-                          ("mouth_diff", "eye_ratio", "brow_diff", "yaw", "pitch", "roll")}
+                          ("mouth_diff", "eye_ratio", "brow_diff", "yaw", "pitch", "roll",
+                           "gaze_h", "blink")}
+        st["gaze"] = self.gaze.status()
+        st["exam"] = self.exam.status() if self.exam else {"active": False}
+        st["last_exam"] = self.last_exam
 
         draw_landmarks(frame, px, ff)
+        draw_pose(frame, ppx)
         thumb = None
         if now >= self._next_thumb:
             self._next_thumb = now + 1.0 / self.bc["thumb_fps"]
@@ -180,6 +293,7 @@ class CameraBed(Bed):
     def close(self):
         self.src.release()
         self.analyzer.close()
+        super().close()
 
 
 class PhoneBed(Bed):
@@ -222,6 +336,7 @@ class PhoneBed(Bed):
 
     def close(self):
         self.analyzer.close()
+        super().close()
 
 
 class SimBed(Bed):
@@ -243,8 +358,16 @@ class SimBed(Bed):
         el = t - self.t0
         if self.scenario.is_offline(el):
             return None
-        ff = self.scenario.features(t, el, self.rng)
-        return self.scenario.draw(ff, el), ff, None
+        cue = self.exam.cue if self.exam else None
+        ff = self.scenario.features(t, el, self.rng, cue)
+        self._sim_pose = self.scenario.pose(t, el, cue, self.rng) if cue else None
+        return self.scenario.draw(ff, el, cue), ff, None
+
+    def pose_features(self, frame, t):
+        return getattr(self, "_sim_pose", None), None
+
+    def pose_problem(self):
+        return None
 
 
 @dataclass
@@ -256,6 +379,9 @@ class Alert:
     onset_time: float | None
     raised_at: float
     score: float
+    kind: str = "face"              # face (droop detector) | exam (BE-FAST check)
+    findings: list = field(default_factory=list)  # human-readable signs, newest last
+    exam: dict | None = None        # latest BE-FAST check result for this alert
     status: str = "active"          # active -> acknowledged -> resolved
     acked_at: float | None = None
     resolved_at: float | None = None
@@ -276,6 +402,7 @@ class BedManager:
         self._next_alert_id = 1
         self._next_bed_num = 1
         self.started = False
+        self.say_hook = None  # set by the server: fn(bed, text, step) -> phone / local speaker
 
     def allocate(self) -> tuple[str, str]:
         """Next free (bed_id, default name), e.g. ("bed9", "Bed 9")."""
@@ -290,6 +417,8 @@ class BedManager:
             if bed.bed_id in self.beds:
                 raise ValueError(f"duplicate bed id {bed.bed_id!r}")
             bed.on_alert = self._raise_alert
+            bed.on_say = self._say
+            bed.on_exam_done = self._exam_done
             self.beds[bed.bed_id] = bed
         if self.started:
             bed.start()
@@ -329,17 +458,66 @@ class BedManager:
             bed.stop()
 
     # ------------------------------------------------------------ alerts
+    def _open_alert(self, bed_id: str) -> Alert | None:  # caller holds self.lock
+        return next((a for a in self.alerts if a.bed_id == bed_id and a.status != "resolved"),
+                    None)
+
     def _raise_alert(self, bed: Bed, st: dict):  # called from the bed's thread
+        finding = f"Face: possible new {st.get('side')} facial droop"
         with self.lock:
-            if any(a.bed_id == bed.bed_id and a.status != "resolved" for a in self.alerts):
+            a = self._open_alert(bed.bed_id)
+            if a is not None:  # e.g. a BE-FAST check alert is already open: add the droop
+                if finding not in a.findings:
+                    a.findings.insert(0, finding)
+                    a.status, a.acked_at = "active", None  # new sign -> alarm again
                 return
             self.alerts.insert(0, Alert(
                 id=self._next_alert_id, bed_id=bed.bed_id, bed_name=bed.bed_name,
                 side=st.get("side"), onset_time=st.get("onset_time"), raised_at=time.time(),
-                score=st.get("score", 0.0)))
+                score=st.get("score", 0.0), findings=[finding]))
             self._next_alert_id += 1
             del self.alerts[MAX_ALERTS:]
         print(f"ALERT {bed.bed_name}: possible new {st.get('side')} droop")
+
+    def _say(self, bed: Bed, text: str, step: str | None):  # called from the bed's thread
+        if self.say_hook:
+            self.say_hook(bed, text, step)
+
+    def _exam_done(self, bed: Bed, res: dict):  # called from the bed's thread
+        """Attach a finished BE-FAST check to the bed's open alert, or raise one if flagged."""
+        with self.lock:
+            a = self._open_alert(bed.bed_id)
+            if a is not None:
+                a.exam = res
+                new = [f for f in res["findings"] if f not in a.findings]
+                a.findings.extend(new)
+                if a.side is None and res["weak_side"] in ("LEFT", "RIGHT"):
+                    a.side = res["weak_side"]
+                return
+            if not res["flagged"]:
+                return
+            self.alerts.insert(0, Alert(
+                id=self._next_alert_id, bed_id=bed.bed_id, bed_name=bed.bed_name,
+                side=res["weak_side"] if res["weak_side"] in ("LEFT", "RIGHT") else None,
+                onset_time=res["started_at"], raised_at=time.time(), score=0.0, kind="exam",
+                findings=list(res["findings"]), exam=res))
+            self._next_alert_id += 1
+            del self.alerts[MAX_ALERTS:]
+        print(f"ALERT {bed.bed_name}: BE-FAST check: {res['summary']}")
+
+    def request_exam(self, bed_id: str) -> bool:
+        bed = self.beds.get(bed_id)
+        if bed is None:
+            return False
+        bed.request_exam()
+        return True
+
+    def cancel_exam(self, bed_id: str) -> bool:
+        bed = self.beds.get(bed_id)
+        if bed is None:
+            return False
+        bed.cancel_exam()
+        return True
 
     def _find(self, alert_id: int) -> Alert | None:
         return next((a for a in self.alerts if a.id == alert_id), None)
@@ -406,10 +584,22 @@ class BedManager:
         if not detail:
             out.pop("features", None)
             out.pop("z", None)
+            le = out.get("last_exam")
+            if le:  # dashboard only needs the gist
+                out["last_exam"] = {k: le.get(k) for k in ("summary", "flagged", "finished_at",
+                                                           "trigger", "cancelled")}
+        out.setdefault("exam", {"active": False})
+        out.setdefault("gaze", None)
+        out.setdefault("last_exam", None)
         with self.lock:
-            open_alert = next((a for a in self.alerts
-                               if a.bed_id == bed.bed_id and a.status != "resolved"), None)
+            open_alert = self._open_alert(bed.bed_id)
             out["alert"] = asdict(open_alert) if open_alert else None
+            if not detail and open_alert and open_alert.exam:
+                out["alert"]["exam"] = None  # full result is on the bed page
+        # An alert raised by the BE-FAST check (face detector still "monitoring") shows as ALERT.
+        if open_alert and out["state"] not in ("offline", "starting"):
+            out["state"] = "ALERT"
+            out["side"] = open_alert.side or out.get("side")
         return out
 
     def snapshot(self) -> dict:

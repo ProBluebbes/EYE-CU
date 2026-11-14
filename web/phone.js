@@ -1,5 +1,6 @@
 // Phone camera page: camera -> (rotate, downscale) -> JPEG over a WebSocket to StrokeWatch.
-// The server sends back JSON: hello (bed + send settings), status (1/s), say (speak text).
+// The server sends back JSON: hello (bed + send settings), status (1/s), say (speak text;
+// with a "step" during a BE-FAST check, also shown big on screen for the patient).
 const $ = (id) => document.getElementById(id);
 const store = {
   get: (k, d = null) => localStorage.getItem(`sw_${k}`) ?? d,
@@ -53,7 +54,24 @@ applyRotation();
 const STATE_TEXT = { baselining: "Building baseline", monitoring: "Monitoring",
                      ALERT: "ALERT raised on dashboard", offline: "Not receiving frames", starting: "Starting" };
 
+// ---------------------------------------------------------------- BE-FAST check prompts
+// Front camera: the screen faces the patient, so "←" is the patient's own left.
+const ARROWS = { look_left: "←", look_right: "→", center: "●", arms: "↑ ↑", legs: "↑" };
+let promptTimer = null;
+function showPrompt(step, text) {
+  clearTimeout(promptTimer);
+  promptTimer = null;
+  if (!step) { $("prompt").hidden = true; return; }
+  $("prompt").hidden = false;
+  $("prompt-arrow").textContent = (facing === "user" && ARROWS[step]) || "";
+  $("prompt-text").textContent = text;
+  if (step === "done") promptTimer = setTimeout(() => { $("prompt").hidden = true; promptTimer = null; }, 5000);
+}
+
 function onStatus(m) {
+  const ex = m.exam || {};
+  if (ex.active && $("prompt").hidden) showPrompt(ex.step, ex.say);  // e.g. after a reconnect
+  else if (!ex.active && !$("prompt").hidden && !promptTimer) showPrompt(null);
   const name = m.bed_name ? `${m.bed_name}: ` : "";
   let text = STATE_TEXT[m.state] || m.state;
   if (m.state === "baselining") text += ` ${Math.round((m.baseline_progress || 0) * 100)}%`;
@@ -134,7 +152,7 @@ function connect() {
       document.title = `StrokeWatch: ${m.bed_name}`;
       startSending();
     } else if (m.type === "status") onStatus(m);
-    else if (m.type === "say") say(m.text);
+    else if (m.type === "say") { say(m.text); if (m.step !== undefined) showPrompt(m.step, m.text); }
   };
   sock.onclose = (e) => {
     if (ws !== sock) return;
