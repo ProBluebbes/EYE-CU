@@ -403,7 +403,8 @@ function connect() {
   ws.onmessage = (e) => {
     if (typeof e.data !== "string") { showFrame(e.data); return; }
     const m = JSON.parse(e.data);
-    if (m.type === "say") Voice.say(m.text);  // webcam bed: this page is the patient's speaker
+    // webcam bed: this page is the patient's speaker (an ESP32 bed has its own speaker)
+    if (m.type === "say" && m.speaker !== "esp32") Voice.say(m.text);
     else render(m);
   };
   ws.onclose = (e) => {

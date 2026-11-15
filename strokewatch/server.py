@@ -90,6 +90,7 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
     key = key or new_key()
 
     voice = ServerVoice(exam_cfg(manager.cfg)["server_voice"])
+    esp32_speaker = bool(bed_cfg(manager.cfg).get("esp32_speaker", False))  # ESP32 beds talk on their own speaker
     bed_listeners: dict[str, set[asyncio.Queue]] = {}  # open bed pages, for spoken prompts
 
     def to_bed_pages(bed_id: str, msg: dict):  # event loop only
@@ -107,6 +108,10 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
             msg = {"type": "say", "text": text, "step": step}
             if isinstance(bed, PhoneBed):
                 asyncio.run_coroutine_threadsafe(phone_send(bed, msg), loop)
+            elif isinstance(bed, CameraBed) and getattr(bed.src, "is_esp32", False) and esp32_speaker:
+                # ESP32-S3 bed: its own buzzer/speaker talks; bed pages only show the prompt
+                bed.src.cap.speaker.say(text)
+                loop.call_soon_threadsafe(to_bed_pages, bed.bed_id, {**msg, "speaker": "esp32"})
             elif isinstance(bed, CameraBed):
                 loop.call_soon_threadsafe(to_bed_pages, bed.bed_id, msg)
                 voice.say(text)
@@ -278,8 +283,11 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
     @app.post("/api/beds/{bed_id}/say")
     async def say(bed_id: str, text: str = Body(..., embed=True)):
         bed = get_bed(bed_id)
+        if isinstance(bed, CameraBed) and getattr(bed.src, "is_esp32", False) and esp32_speaker:
+            bed.src.cap.speaker.say(text[:300])
+            return {"ok": True}
         if not isinstance(bed, PhoneBed):
-            raise HTTPException(400, "only phone beds have a speaker")
+            raise HTTPException(400, "only phone and ESP32 beds have a speaker")
         if not await phone_send(bed, {"type": "say", "text": text[:300]}):
             raise HTTPException(409, "phone not connected")
         return {"ok": True}
@@ -459,7 +467,10 @@ def build_manager(cfg: dict, cameras: list[str], mock_beds: int, scenario: str |
         head, eq, tail = spec.partition("=")
         if eq and head.strip() and not any(c in head for c in ":/\\"):
             name, src = head.strip(), tail
-        manager.add(CameraBed(bed_id, name, cfg, src))
+        bed = CameraBed(bed_id, name, cfg, src)
+        if bed.src.is_esp32:
+            bed.label = f"ESP32-S3 camera ({bed.src.cap.port})"
+        manager.add(bed)
     # Permanent video beds: looped forever, always present.
     for v, path in videos:
         bed_id, name = (f"bed{int(v['bed'])}", f"Bed {int(v['bed'])}") if v.get("bed") \

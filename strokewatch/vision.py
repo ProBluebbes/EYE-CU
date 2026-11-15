@@ -445,7 +445,7 @@ def rotate_frame(frame: np.ndarray, degrees_cw: int) -> np.ndarray:
 
 
 class VideoSource:
-    """Webcam index ("0") or video file.
+    """Webcam index ("0"), video file, or an ESP32-S3 on USB ("esp32", see strokewatch/esp32.py).
 
     clock="wall": t is time.time() (live use; onset shows a real clock time).
     clock="video": t is the file's own timeline (replay).
@@ -455,8 +455,10 @@ class VideoSource:
     def __init__(self, source: str | int, width: int | None = None, height: int | None = None,
                  clock: str = "wall", realtime: bool = False, loop: bool = False,
                  rotate: int = 0):
+        from .esp32 import is_esp32_source
         self.source = str(source)
-        self.is_file = not self.source.isdigit()
+        self.is_esp32 = is_esp32_source(self.source)   # "esp32" / "esp32:/dev/cu.x": USB-serial camera
+        self.is_file = not self.source.isdigit() and not self.is_esp32
         self.clock, self.realtime, self.loop = clock, realtime, loop
         if int(rotate) % 360 not in _ROTATE_CODES:
             raise ValueError(f"camera.rotate must be 0, 90, 180 or 270, got {rotate}")
@@ -470,6 +472,10 @@ class VideoSource:
         self._next_wall = time.monotonic()
 
     def _open(self):
+        if self.is_esp32:
+            from .esp32 import Esp32Capture
+            self.cap = Esp32Capture(self.source)
+            return
         self.cap = cv2.VideoCapture(self.source if self.is_file else int(self.source))
         if not self.cap.isOpened():
             raise RuntimeError(f"could not open video source {self.source!r} "

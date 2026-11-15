@@ -220,6 +220,10 @@ server:
   jpeg_quality: 75
 
 beds:
+  # ESP32-S3 camera beds (--camera esp32): true = BE-FAST prompts play on the board's own speaker
+  # (reading_esp/esp32s3_cam_usb); false = on the bed page / this computer like a webcam bed. A bare
+  # piezo can't play speech, so it's off until the board has an amp + speaker (e.g. MAX98357A).
+  esp32_speaker: false
   # Max frames analyzed per second per camera bed (camera frames in between are dropped,
   # which keeps latency low). The detector counts valid seconds, so it works at any rate.
   analysis_fps: 15
@@ -241,7 +245,7 @@ beds:
   # 90-180 s through the full pipeline: no alert, combined score <= 0.45 (line 1.19). Not used:
   # palsy-dataset "unaffected" clips (people talk non-stop; the score reached 1.07-1.55).
   videos:
-    - bed: 2
+    - bed: 7
       label: "Healthy: Banghua"
       source: clips/banghua.mp4
     - bed: 5
