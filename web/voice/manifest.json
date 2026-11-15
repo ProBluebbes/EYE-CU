@@ -1,0 +1,97 @@
+{
+ "voice_id": "SAz9YHcvj6GT2YYXdXww",
+ "model": "eleven_multilingual_v2",
+ "settings": {
+  "stability": 0.65,
+  "similarity_boost": 0.75,
+  "style": 0.0,
+  "speed": 0.9,
+  "use_speaker_boost": true
+ },
+ "lines": {
+  "This is StrokeWatch. Please follow a few quick instructions.": {
+   "file": "d39efcba60ae.mp3",
+   "seconds": 3.45
+  },
+  "Keep your head still, and look straight at the camera.": {
+   "file": "3ba0f21407cf.mp3",
+   "seconds": 2.95
+  },
+  "Without moving your head, look to your left.": {
+   "file": "4f20205ba185.mp3",
+   "seconds": 2.61
+  },
+  "Now look to your right.": {
+   "file": "3cc1edf360b7.mp3",
+   "seconds": 1.31
+  },
+  "Close your eyes. Hold both arms straight out in front of you, palms up, and keep them there.": {
+   "file": "3bc19ed669cb.mp3",
+   "seconds": 5.28
+  },
+  "Thank you. You can lower your arms and open your eyes.": {
+   "file": "3c9c1fa20b47.mp3",
+   "seconds": 3.45
+  },
+  "Now lift both legs up, and hold them there.": {
+   "file": "98bec47edf41.mp3",
+   "seconds": 2.48
+  },
+  "Thank you. Lower your legs.": {
+   "file": "81b2f0744921.mp3",
+   "seconds": 1.78
+  },
+  "Let's do the eyes once more. Keep your head still, and only move your eyes. Look straight at the camera.": {
+   "file": "736226519c33.mp3",
+   "seconds": 6.9
+  },
+  "That's all, thank you.": {
+   "file": "0a2d6aa6ca59.mp3",
+   "seconds": 1.31
+  },
+  "That's all, thank you. A nurse has been told.": {
+   "file": "6ec9109b084b.mp3",
+   "seconds": 2.54
+  },
+  "The check was stopped.": {
+   "file": "6ff0ced5d02f.mp3",
+   "seconds": 1.47
+  },
+  "Calibrating. Look straight at the camera and relax your face.": {
+   "file": "4c3f5ef9e16a.mp3",
+   "seconds": 3.56
+  },
+  "Slowly turn your head to one side, as far as is comfortable, and hold it there.": {
+   "file": "717752727108.mp3",
+   "seconds": 5.04
+  },
+  "Now slowly turn your head to the other side, and hold it there.": {
+   "file": "37ea523f5dc8.mp3",
+   "seconds": 3.69
+  },
+  "Now look straight at the camera again.": {
+   "file": "921437433b69.mp3",
+   "seconds": 2.01
+  },
+  "Calibration done. Monitoring.": {
+   "file": "167f26f58316.mp3",
+   "seconds": 2.07
+  },
+  "StrokeWatch camera on.": {
+   "file": "bdf97eb7aac9.mp3",
+   "seconds": 1.47
+  },
+  "This is a voice test from StrokeWatch.": {
+   "file": "e0a26e43ad7b.mp3",
+   "seconds": 2.25
+  },
+  "Calibration starting.": {
+   "file": "f5db8af874e5.mp3",
+   "seconds": 1.52
+  },
+  "This is a test from the StrokeWatch dashboard.": {
+   "file": "798e0dba0935.mp3",
+   "seconds": 2.48
+  }
+ }
+}

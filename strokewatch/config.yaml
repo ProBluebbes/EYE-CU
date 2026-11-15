@@ -150,13 +150,25 @@ exam:
   auto: true
   cooldown_s: 300           # min gap between automatic checks for gaze deviation
   legs: true
-  server_voice: true        # webcam beds: speak through this computer (macOS `say`)
+  server_voice: false       # webcam beds: the bed page speaks; true = also the server's speaker
+                            # (afplay/`say`; silent when the server runs in a detached tmux)
   alert_on_no_response: true  # no response to any instruction -> alert
   max_gap_s: 5              # no camera frames this long -> check cancelled
   min_samples: 5
-  head_turn_deg: 8          # head turned this far toward a look-side = eyes not judged there
-  gaze_min_excursion: 0.04  # neither direction beyond this = "eyes did not move"
+  # Eyes are judged only if the patient followed the eye steps; otherwise the eyes part is
+  # INCONCLUSIVE (instructions not followed), shown on the dashboard, not alerted. A first
+  # try that isn't clean is repeated once; a sign must then show on both tries.
+  head_turn_deg: 8          # head moved this far on a look step = "moved the head" (a sign
+                            # from that step isn't trusted)
+  gaze_min_excursion: 0.04  # eyes moved less than this between steps = "stayed in the same place"
+  gaze_full_excursion: 0.08 # the better side must reach this (~half of full sideways), else
+                            # "moved only slightly"
   gaze_ratio: 0.45          # weaker direction < this x stronger = can't look to that side
+  gaze_wrong_way: 0.06      # eyes settled this far the opposite way = "looked the wrong way"
+  gaze_hold_tol: 0.04       # eyes "held still" = within +-this of one position ...
+  gaze_hold_min: 0.5        # ... for this share of a step, else "eyes kept moving"
+  gaze_min_coverage: 0.4    # eyes tracked in this share of a step's frames (else: closed eyes /
+                            # head turned away = not followed; face lost = not assessed)
   arm_raise_gain: 0.4       # wrist this much higher than at rest (while hearing the prompt) = raised
   arm_up_min: -0.9          # if the resting height wasn't seen: wrist at least this high (vs shoulder);
                             # live: raised -0.4..+1.0 depending on camera angle, lowered -1.3..-1.6

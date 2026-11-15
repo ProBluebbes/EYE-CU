@@ -39,6 +39,7 @@ class SimScenario:
     offline: list = field(default_factory=list)  # [(start, end)] no camera frames
     gaze_dev_at: float | None = None  # eyes held toward the lesion (away from `side`) from here
     arm_weak_at: float | None = None  # the `side` arm is weak from here (drifts / can't lift)
+    ignores_eye_check: bool = False   # keeps staring at one spot (a TV) through the eye steps
     _gaze: float = field(default=0.0, repr=False)   # current fixation point (wanders)
     _pose: PoseFeatures | None = field(default=None, repr=False)
 
@@ -63,7 +64,10 @@ class SimScenario:
         deviated eyes stay toward the lesion and can't cross far to the weak side."""
         dev = self._after(self.gaze_dev_at, el)
         key, ce = cue if cue else (None, 0.0)
+        key = key.removesuffix("_2") if key else key  # the eye steps' second try
         toward = -self.side  # lesion side, as a gaze sign
+        if self.ignores_eye_check and key in ("center", "look_left", "look_right"):
+            return 0.12 + float(rng.normal(0, 0.01))
         if key in ("center", "look_left", "look_right") and ce > 1.6:
             want = {"center": 0.0, "look_left": 0.18, "look_right": -0.18}[key]
             if dev:  # can reach the lesion side; barely gets past midline the other way
@@ -169,7 +173,8 @@ def ward_scenarios(n: int) -> list[SimScenario]:
              gaze_dev_at=200),
         dict(label="eyes to right + left arm weak at 110 s, face normal", side=1,
              gaze_dev_at=110, arm_weak_at=110),
-        dict(label="stable, restless", turn_every=18, turn_len=5),
+        dict(label="stable, restless, won't follow the eye check", turn_every=18, turn_len=5,
+             ignores_eye_check=True),
     ]
     out = []
     for i in range(n):

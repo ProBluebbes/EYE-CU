@@ -110,6 +110,7 @@ body {
 .alert-meta { color: var(--muted); font-size: 13px; margin-top: 3px; }
 .alert-findings { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
 .alert-findings li { margin: 2px 0; }
+.alert-note { color: #e0b44c; font-size: 13px; margin-top: 5px; }
 .alert-btns { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
 .alert-btns button {
   font: inherit; font-size: 13px; font-weight: 700; padding: 6px 10px; border: 0; border-radius: 7px;

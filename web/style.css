@@ -80,6 +80,8 @@ button.danger:hover { background: #7a2a2e; }
 .st.normal { background: #1d3b2a; color: #9be3b5; }
 .st.abnormal { background: var(--red); }
 .st.no_response { background: #6b4e0f; }
+.st.inconclusive { background: #6b4e0f; color: #ffd98a; }
+.exam-head.inconclusive { color: #e0b44c; }
 .gaze-row { display: grid; grid-template-columns: 50px 1fr 110px; align-items: center; gap: 10px; margin-top: 6px; font-size: 16px; }
 .gtrack { position: relative; height: 16px; background: #23272f; border-radius: 4px; }
 .gmid { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; background: #555; }
@@ -91,3 +93,8 @@ button.danger:hover { background: #7a2a2e; }
 .exam-btns button { flex: 1; font-size: 18px; padding: 12px; }
 #exam-start { background: #23508f; }
 #exam-start:hover { background: #2d62ad; }
+
+/* webcam bed: voice prompts play on the bed page */
+.sound-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 15px; }
+.sound-row button { font-size: 15px; padding: 8px 14px; }
+.sound-off { color: #f3d48a; font-weight: 700; }

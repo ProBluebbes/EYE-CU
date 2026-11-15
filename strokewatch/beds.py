@@ -20,8 +20,9 @@ from dataclasses import asdict, dataclass, field
 import cv2
 import numpy as np
 
-from .befast import ExamRunner, GazeMonitor, exam_cfg
+from .befast import STOPPED, ExamRunner, GazeMonitor, exam_cfg
 from .detector import Detector
+from .localize import localize
 from .mock import SimScenario
 from .vision import (FaceAnalyzer, FrameFeatures, PoseAnalyzer, PoseFeatures, VideoSource,
                      draw_landmarks, draw_pose, draw_readout)
@@ -155,7 +156,7 @@ class Bed(threading.Thread):
         req, self._exam_req = self._exam_req, None
         if req and req[0] == "cancel" and self.exam:
             self.exam.cancel(req[1])
-            self._say("The check was stopped.", None)
+            self._say(STOPPED, None)
         elif req and req[0] == "start" and self.exam is None:
             self._start_exam(req[1], ff.t)
         if self.exam is None and self.ec["auto"]:
@@ -378,17 +379,25 @@ class Alert:
     id: int
     bed_id: str
     bed_name: str
-    side: str | None
+    side: str | None                # patient's WEAK side (signs), not the side of the brain
     onset_time: float | None
     raised_at: float
     score: float
     kind: str = "face"              # face (droop detector) | exam (BE-FAST check)
     findings: list = field(default_factory=list)  # human-readable signs, newest last
+    notes: list = field(default_factory=list)     # not signs: e.g. a check part inconclusive
     exam: dict | None = None        # latest BE-FAST check result for this alert
     status: str = "active"          # active -> acknowledged -> resolved
     acked_at: float | None = None
     resolved_at: float | None = None
     resolution: str | None = None   # false_alarm | confirmed | reset | removed
+    face_side: str | None = None    # side of the face droop, if the detector saw one
+    localization: dict | None = None  # localize.localize(): hedged "may be a ... stroke"
+
+    def relocalize(self):
+        self.localization = localize(self.face_side, self.exam)
+        if self.localization and self.localization["weak_side"]:
+            self.side = self.localization["weak_side"]
 
 
 RESOLUTIONS = {"false_alarm", "confirmed", "reset", "removed"}
@@ -473,11 +482,15 @@ class BedManager:
                 if finding not in a.findings:
                     a.findings.insert(0, finding)
                     a.status, a.acked_at = "active", None  # new sign -> alarm again
+                a.face_side = st.get("side")
+                a.relocalize()
                 return
-            self.alerts.insert(0, Alert(
+            a = Alert(
                 id=self._next_alert_id, bed_id=bed.bed_id, bed_name=bed.bed_name,
                 side=st.get("side"), onset_time=st.get("onset_time"), raised_at=time.time(),
-                score=st.get("score", 0.0), findings=[finding]))
+                score=st.get("score", 0.0), findings=[finding], face_side=st.get("side"))
+            a.relocalize()
+            self.alerts.insert(0, a)
             self._next_alert_id += 1
             del self.alerts[MAX_ALERTS:]
         print(f"ALERT {bed.bed_name}: possible new {st.get('side')} droop")
@@ -494,16 +507,21 @@ class BedManager:
                 a.exam = res
                 new = [f for f in res["findings"] if f not in a.findings]
                 a.findings.extend(new)
+                a.notes = list(res.get("notes") or [])  # about the latest check only
                 if a.side is None and res["weak_side"] in ("LEFT", "RIGHT"):
                     a.side = res["weak_side"]
+                a.relocalize()  # face droop + this check together
+                res["localization"] = a.localization
                 return
             if not res["flagged"]:
                 return
-            self.alerts.insert(0, Alert(
+            a = Alert(
                 id=self._next_alert_id, bed_id=bed.bed_id, bed_name=bed.bed_name,
                 side=res["weak_side"] if res["weak_side"] in ("LEFT", "RIGHT") else None,
                 onset_time=res["started_at"], raised_at=time.time(), score=0.0, kind="exam",
-                findings=list(res["findings"]), exam=res))
+                findings=list(res["findings"]), notes=list(res.get("notes") or []), exam=res)
+            a.relocalize()
+            self.alerts.insert(0, a)
             self._next_alert_id += 1
             del self.alerts[MAX_ALERTS:]
         print(f"ALERT {bed.bed_name}: BE-FAST check: {res['summary']}")
@@ -590,7 +608,8 @@ class BedManager:
             le = out.get("last_exam")
             if le:  # dashboard only needs the gist
                 out["last_exam"] = {k: le.get(k) for k in ("summary", "flagged", "finished_at",
-                                                           "trigger", "cancelled")}
+                                                           "trigger", "cancelled",
+                                                           "inconclusive", "notes")}
         out.setdefault("exam", {"active": False})
         out.setdefault("gaze", None)
         out.setdefault("last_exam", None)

@@ -60,6 +60,11 @@ function alertHeadline(a) {
   const f = a.findings && a.findings.length ? a.findings : [`Face: possible new ${a.side} facial droop`];
   return stripTag(f[0]) + (f.length > 1 ? ` (+${f.length - 1} more)` : "");
 }
+// A BE-FAST check part the patient didn't follow (eyes wandered, looked the wrong way, ...).
+const inconclusive = (le) => !!(le && !le.cancelled && le.inconclusive && le.inconclusive.length);
+const PART_NAMES = { eyes: "eyes", arms: "arms", legs: "legs" };
+const inconclusiveText = (le) =>
+  `${le.inconclusive.map((k) => PART_NAMES[k] || k).join(" + ")} inconclusive (instructions not followed)`;
 const SCALE = 1.5; // score bar spans 0 .. 1.5 x threshold
 
 function renderTile(bed) {
@@ -122,12 +127,17 @@ function renderTile(bed) {
     if (bed.gaze && bed.gaze.deviation) parts.push(`gaze held ${bed.gaze.deviation}`);
     const le = bed.last_exam;
     if (!exam && le && !le.cancelled && serverNow() - le.finished_at < 1800) {
-      parts.push(le.flagged ? `check ${fmtTime(le.finished_at)}: abnormal` : `check ${fmtTime(le.finished_at)}: normal`);
+      const when = `check ${fmtTime(le.finished_at)}`;
+      if (le.flagged) parts.push(`${when}: abnormal`);
+      if (inconclusive(le)) parts.push(`${when}: ${inconclusiveText(le)}`);
+      if (!le.flagged && !inconclusive(le)) parts.push(`${when}: normal`);
     }
   }
   if (bed.fps && bed.state !== "offline") parts.push(`${bed.fps} fps`);
   t.sub.textContent = parts.join(" · ");
-  t.sub.classList.toggle("warn", !bed.valid && bed.state !== "offline");
+  const le = bed.last_exam, recentInc = !exam && inconclusive(le) && serverNow() - le.finished_at < 1800;
+  t.sub.title = recentInc ? (le.notes || []).join("\n") : "";
+  t.sub.classList.toggle("warn", (!bed.valid || recentInc) && bed.state !== "offline");
 }
 
 function onThumb(buf) {
@@ -151,7 +161,7 @@ function renderAlerts(alerts) {
   const active = alerts.filter((a) => a.status === "active").length;
   $("alert-count").textContent = open.length ? `${open.length} open${active ? `, ${active} unacknowledged` : ""}` : "";
 
-  const sig = JSON.stringify(alerts.map((a) => [a.id, a.status, (a.findings || []).length]));
+  const sig = JSON.stringify(alerts.map((a) => [a.id, a.status, (a.findings || []).length, a.notes]));
   if (sig !== alertSig) {
     alertSig = sig;
     const list = $("alert-list");
@@ -180,7 +190,8 @@ function alertItem(a) {
     for (const f of a.findings) ul.append(el("li", null, stripTag(f)));
     box.append(ul);
   }
-  if (a.side && a.findings && a.findings.length > 1) box.append(el("div", "alert-meta", `signs point to the ${a.side} side`));
+  if (a.localization) box.append(el("div", "alert-meta", `${a.localization.text} ${a.localization.caveat}`));
+  for (const n of a.notes || []) box.append(el("div", "alert-note", n));
 
   if (a.status === "acknowledged") box.append(el("div", "alert-meta", `acknowledged ${fmtTime(a.acked_at)}`));
   if (a.status === "resolved") {

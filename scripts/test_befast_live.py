@@ -183,6 +183,8 @@ def main():
                   f"(last median {r['value'] if r['value'] is None else round(r['value'], 3)})")
         else:
             print(f"\n== {trial}: {r['summary']}  | weak side: {r['weak_side']}")
+            if r.get("localization"):
+                print("   ", r["localization"]["text"])
             for k, c in r["components"].items():
                 print(f"   {k}: {c['status']} - {c['detail']}")
                 if c["values"]:

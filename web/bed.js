@@ -58,6 +58,7 @@ function render(st) {
   $("bed-kind").textContent = { sim: "SIM", phone: "PHONE" }[st.kind] || "";
   $("bed-kind").hidden = !$("bed-kind").textContent;
   $("phone-actions").hidden = st.kind !== "phone";
+  $("sound-row").hidden = st.kind !== "camera";
   banner.className = `banner ${st.state}`;
   if (st.state === "offline") {
     const age = st.last_frame_age == null ? "" : ` (last frame ${Math.round(st.last_frame_age)} s ago)`;
@@ -86,12 +87,18 @@ function render(st) {
       : st.onset_time ? fmtTime(st.onset_time) : "?";
     const ack = st.alert && st.alert.status === "acknowledged" ? " (acknowledged)" : "";
     const signs = alertSigns(st);
-    const sided = st.side ? `${st.side}-sided ` : "";
-    bannerText.textContent = signs.length === 1 && signs[0].startsWith("Face:")
+    // st.side is the patient's WEAK side, not the side of the brain: the hemisphere wording
+    // ("may be a right hemispheric stroke") comes from the server's localization.
+    const loc = st.alert && st.alert.localization;
+    const faceOnly = signs.length === 1 && signs[0].startsWith("Face:");
+    bannerText.textContent = faceOnly
       ? `STROKE ALERT: possible new ${st.side} facial droop, onset ${onset}${ack}`
-      : `STROKE ALERT: ${sided}stroke signs, onset ${onset}${ack}`;
-    $("banner-sub").textContent = signs.join(" · ");
-    $("banner-sub").hidden = signs.length === 1 && signs[0].startsWith("Face:");
+      : `STROKE ALERT: possible stroke signs${loc ? `, ${loc.short}` : ""}, onset ${onset}${ack}`;
+    const sub = faceOnly ? [] : [signs.join(" · ")];
+    if (loc) sub.push(`${loc.text} ${loc.caveat}`);
+    $("banner-sub").textContent = sub.join("\n");
+    $("banner-sub").style.whiteSpace = "pre-line";
+    $("banner-sub").hidden = !sub.length;
   }
   if (st.state === "ALERT" && lastState !== "ALERT") beep();
   lastState = st.state;
@@ -124,7 +131,7 @@ function renderZ(st) {
 // ---------------------------------------------------------------- BE-FAST check
 const COMP_NAMES = { eyes: "Eyes", arms: "Arm drift", legs: "Leg drift" };
 const ST_TEXT = { normal: "normal", abnormal: "ABNORMAL", no_response: "no response",
-                  not_assessed: "not assessed", skipped: "skipped" };
+                  inconclusive: "INCONCLUSIVE", not_assessed: "not assessed", skipped: "skipped" };
 let examSig = "";
 
 function renderExam(st) {
@@ -150,8 +157,9 @@ function renderExam(st) {
     else {
       const rows = Object.entries(r.components).map(([k, c]) =>
         `<div class="comp"><span>${COMP_NAMES[k] || k}</span><span class="st ${c.status}">${ST_TEXT[c.status] || c.status}</span><span>${esc(c.detail)}</span></div>`).join("");
-      box.innerHTML = `<div class="exam-head ${r.flagged ? "flagged" : ""}">Last check ${fmtTime(r.finished_at)}: ${esc(r.summary)}</div>
-        <div class="muted" style="font-size:14px;margin-bottom:4px">reason: ${esc(r.trigger)}${r.weak_side ? ` · weak side: ${r.weak_side}` : ""}</div>${rows}`;
+      const head = r.flagged ? "flagged" : (r.inconclusive || []).length ? "inconclusive" : "";
+      box.innerHTML = `<div class="exam-head ${head}">Last check ${fmtTime(r.finished_at)}: ${esc(r.summary)}</div>
+        <div class="muted" style="font-size:14px;margin-bottom:4px">reason: ${esc(r.trigger)}${r.localization ? ` · ${esc(r.localization.text)} ${esc(r.localization.caveat)}` : ""}</div>${rows}`;
     }
   }
   renderGaze(st);
@@ -212,6 +220,15 @@ async function rebuild(action) {
 $("reset").addEventListener("click", () => rebuild("reset"));
 $("calibrate").addEventListener("click", () => rebuild("calibrate"));
 
+// Webcam beds: check prompts play on this page, which needs one click first (browser rule).
+function renderSound(on) {
+  $("sound-state").textContent = on ? "Voice prompts play on this computer"
+                                    : "Click anywhere on this page to turn on voice prompts";
+  $("sound-state").className = on ? "muted" : "sound-off";
+}
+renderSound(Voice.unlocked);
+Voice.onUnlockChange(renderSound);
+$("sound-test").addEventListener("click", () => Voice.say("This is a voice test from StrokeWatch."));
 $("say-test").addEventListener("click", async () => {
   const r = await fetch(`${API}/say`, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: "This is a test from the StrokeWatch dashboard." }) });
@@ -226,7 +243,11 @@ $("remove").addEventListener("click", async () => {
 // ---------------------------------------------------------------- websocket
 function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${API}/ws`);
-  ws.onmessage = (e) => render(JSON.parse(e.data));
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === "say") Voice.say(m.text);  // webcam bed: this page is the patient's speaker
+    else render(m);
+  };
   ws.onclose = (e) => {
     if (e.code === 4404) {
       banner.className = "banner offline";

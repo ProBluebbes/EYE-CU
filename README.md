@@ -71,8 +71,10 @@ Simulated patients (`--mock-beds N`, labelled SIM) follow scripted timelines fro
 new left droop + weak left arm at 75 s, stable, old droop worsening at 140 s, talkative, camera
 dropouts at 60–90 s, new right droop + eyes to the left + weak right arm at 200 s, eyes held
 right + weak left arm at 110 s with a normal face (only the gaze watch catches it), restless
-(cycles beyond 8 beds). They follow the BE-FAST check's instructions, so you can watch a full
-check without a camera (or press **Run BE-FAST check** on any SIM bed page).
+and won't follow the eye steps (keeps staring at one spot, so the eyes part comes out
+INCONCLUSIVE) (cycles beyond 8 beds). They follow the BE-FAST check's instructions (except
+that last one), so you can watch a full check without a camera (or press **Run BE-FAST
+check** on any SIM bed page).
 Everything is in memory: a restart starts fresh.
 
 Each module runs on its own:
@@ -98,23 +100,44 @@ Any config value can be overridden: `--set detector.threshold=3.5 --set vision.l
   (max one gaze-triggered check per 5 min), or with **Run BE-FAST check** on the bed page:
   1. "Keep your head still, and look straight at the camera." / "look to your left" /
      "Now look to your right." Can't look fully to one side (gaze palsy), or eyes stay turned
-     when asked to look ahead → abnormal.
+     when asked to look ahead → abnormal. **Only if the patient followed the steps:** eyes
+     closed, head turned away or moved (> 8°), eyes roaming instead of holding a side, looking
+     the wrong way, eyes staying in one place for every instruction, or barely moving →
+     **INCONCLUSIVE (instructions not followed)**, with the reasons. If the first try isn't
+     clean (not followed, or a possible sign), the eye steps are asked once more (~+20 s); a
+     sign counts only if both tries show it, and a good second try overrides a bad first one.
+     (On simulated patients who ignore the prompts, one try read "abnormal" 17% of the time;
+     with these checks: 98% inconclusive, ~2% normal, 0.3% abnormal.)
   2. "Close your eyes. Hold both arms straight out in front of you, palms up…" (10 s, MediaPipe
      Pose). One arm not raised, or sinking clearly more than the other (pronator-drift style)
      → abnormal. Shown in shoulder widths; the "eyes stayed open" note checks the instruction.
   3. "Now lift both legs up, and hold them there." (5 s) Same idea with ankles/knees. Skipped
      automatically (nothing is said) when hips and knees weren't in view during the arm step.
-  4. No response to any instruction → "Did not follow the check's instructions" (possible
-     confusion/aphasia), which also alerts.
+  4. No response to any instruction (eyes and arms both not followed) → "Did not follow the
+     check's instructions" (possible confusion/aphasia), which also alerts. One part alone
+     not followed (e.g. a face-only camera and an inconclusive eyes part) doesn't alert.
 - **Where the voice comes out:** phone beds speak through the phone and show the instruction
   in large text (with ←/→ arrows for the patient's own left/right). Webcam beds speak through
   this computer (macOS `say`; set `exam.server_voice: false` if the camera isn't next to the
   patient). SIM beds are silent; the prompt shows on the dashboard and bed page.
 - **Results:** findings are added to the bed's open alert ("possible new LEFT facial droop" +
-  "Arm drift: left arm drifted down…", "signs point to the LEFT side"), or raise a new alert if
-  there was none. A normal check raises nothing. The bed page shows each part (normal /
-  ABNORMAL / no response / not assessed) and a live gaze bar. The face detector is paused
+  "Arm drift: left arm drifted down…"), or raise a new alert if there was none. A normal check raises nothing. An inconclusive part shows on the dashboard
+  tile in amber ("check 14:02: eyes inconclusive (instructions not followed)", reasons on
+  hover) and as a note on the bed's open alert. The bed page shows each part (normal /
+  ABNORMAL / INCONCLUSIVE / no response / not assessed) and a live gaze bar. The face detector is paused
   while a check runs, so deliberate eye and arm movements can't cause a droop alert.
+- **Where the signs may point** (`strokewatch/localize.py`). Signs are recorded by the
+  patient's *weak* side; the alert adds hedged wording about the brain, never a diagnosis.
+  Example: eyes can't look left, or left arm drift, gives "signs on the patient's left side:
+  this may be a right hemispheric stroke". The rules come from the literature:
+  - Hemispheric stroke: eyes turn toward the lesion, and the weakness is on the opposite side.
+  - Eye signs plus one-sided weakness: a warning sign of a large-vessel occlusion.
+  - Eyes turned toward the weak side ("wrong-way" eyes): may be a brainstem (pontine) stroke,
+    a thalamic bleed or a seizure.
+  - Face weak on one side and limbs on the other (crossed signs): may be a brainstem stroke.
+  - Weakness without eye signs can also come from a small deep (lacunar) stroke.
+
+  Every message ends with "Screening signs only, not a diagnosis".
 
 Thresholds are in `config.yaml` under `gaze:` and `exam:`. They are **provisional** (tuned on
 simulated patients and photos only), so see the tuning notes below.

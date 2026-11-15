@@ -15,7 +15,8 @@ Endpoints
   WS   /api/dashboard/ws          JSON state (all beds + alerts + tunnel) and binary thumbnails
   GET  /bed/<id>                  bed page
   GET  /api/beds/<id>/video       MJPEG, full size
-  WS   /api/beds/<id>/ws          JSON status for one bed
+  WS   /api/beds/<id>/ws          JSON status for one bed; webcam beds also {"type": "say", ...}
+                                  (spoken check prompts, played by the page)
   POST /api/beds/<id>/reset       rebuild baseline (closes any open alert as "reset")
   POST /api/beds/<id>/calibrate   same, as a guided calibration (look straight, turn and hold
                                   each side, straight again); prompts in the status
@@ -71,6 +72,11 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
     key = key or new_key()
 
     voice = ServerVoice(exam_cfg(manager.cfg)["server_voice"])
+    bed_listeners: dict[str, set[asyncio.Queue]] = {}  # open bed pages, for spoken prompts
+
+    def to_bed_pages(bed_id: str, msg: dict):  # event loop only
+        for q in bed_listeners.get(bed_id, ()):
+            q.put_nowait(msg)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -78,11 +84,13 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
 
         def say_hook(bed, text: str, step: str | None):
             """BE-FAST check prompts (called from bed threads). Phones speak and show the
-            prompt on screen; webcam beds use this computer's speaker; SIM beds stay silent."""
+            prompt on screen; webcam beds are spoken by their open bed pages (and this
+            computer's speaker if exam.server_voice); SIM beds stay silent."""
+            msg = {"type": "say", "text": text, "step": step}
             if isinstance(bed, PhoneBed):
-                msg = {"type": "say", "text": text, "step": step}
                 asyncio.run_coroutine_threadsafe(phone_send(bed, msg), loop)
             elif isinstance(bed, CameraBed):
+                loop.call_soon_threadsafe(to_bed_pages, bed.bed_id, msg)
                 voice.say(text)
 
         manager.say_hook = say_hook
@@ -185,11 +193,15 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
             await sock.close(code=4404)
             return
         last = -1
+        says: asyncio.Queue = asyncio.Queue()
+        bed_listeners.setdefault(bed_id, set()).add(says)
         try:
             while not stopping():
                 if manager.beds.get(bed_id) is not bed:  # removed
                     await sock.close(code=4404)
                     return
+                while not says.empty():  # spoken prompts: the page plays them
+                    await sock.send_json(says.get_nowait())
                 fid, _, _ = bed.latest()
                 st = manager.bed_status(bed, detail=True)
                 # every new frame, plus at least 1/s so "offline" shows up when frames stop
@@ -199,6 +211,8 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
                 await asyncio.sleep(0.05 if st["state"] != "offline" else 1.0)
         except (WebSocketDisconnect, RuntimeError):
             pass
+        finally:
+            bed_listeners.get(bed_id, set()).discard(says)
 
     @app.post("/api/beds/{bed_id}/reset")
     def reset_bed(bed_id: str):

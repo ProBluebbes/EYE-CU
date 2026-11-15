@@ -7,8 +7,8 @@ stroke the eyes deviate TOWARD the lesion, i.e. away from the weak side).
 
 ExamRunner (active, ~40 s): a voice-guided bedside check. It starts automatically when the
 face detector raises a facial-droop ALERT or the GazeMonitor flags a deviation (or when staff
-press "Run BE-FAST check"). It speaks short instructions (phone speaker for phone beds, this
-computer's speaker for webcam beds, see ServerVoice) and measures the responses:
+press "Run BE-FAST check"). It speaks short instructions (the phone for phone beds, the bed
+page in the browser for webcam beds; recorded clips from voice.py) and measures the responses:
   look straight / left / right            -> gaze palsy (can't look to one side) or fixed deviation
   close eyes, both arms out, palms up, 10 s -> arm drift (pronator-drift style, MediaPipe Pose)
   lift both legs, 5 s                     -> leg drift (only if hips + knees are in view)
@@ -26,10 +26,11 @@ import shutil
 import subprocess
 import threading
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
+from .localize import localize
 from .vision import FrameFeatures, PoseFeatures
 
 GAZE_DEFAULTS = {
@@ -45,13 +46,18 @@ EXAM_DEFAULTS = {
     "auto": True,             # start automatically on facial-droop ALERT / gaze deviation
     "cooldown_s": 300,        # min seconds between automatic checks for gaze deviation
     "legs": True,             # include the leg step (skipped anyway if legs aren't in view)
-    "server_voice": True,     # webcam beds: speak through this computer's speaker
+    "server_voice": False,    # webcam beds: the bed page speaks; True = also the server's speaker
     "alert_on_no_response": True,
     "max_gap_s": 5,           # no camera frames for this long -> check cancelled
     "min_samples": 5,
-    "head_turn_deg": 8,           # head turned this far toward a look-side: eyes not judged there
-    "gaze_min_excursion": 0.04,   # weaker of the two directions below this x stronger = palsy
-    "gaze_ratio": 0.45,
+    "head_turn_deg": 8,           # head moved this far on a look step = "moved the head"
+    "gaze_min_excursion": 0.04,   # neither direction beyond this = "eyes did not move"
+    "gaze_full_excursion": 0.08,  # the better direction must reach this to judge at all
+    "gaze_ratio": 0.45,           # weaker direction below this x stronger = palsy
+    "gaze_wrong_way": 0.06,       # eyes held this far the OPPOSITE way = looked the wrong way
+    "gaze_hold_tol": 0.04,        # a step's fixation = samples within +-this of one position ...
+    "gaze_hold_min": 0.5,         # ... covering this share of the step, else "eyes kept moving"
+    "gaze_min_coverage": 0.4,     # eyes must be tracked in this share of a step's frames
     "arm_raise_gain": 0.4,        # wrist this much higher (shoulder widths) than at rest = raised
     "arm_up_min": -0.9,           # if the resting height wasn't seen: wrist at least this high
                                   # (live: raised -0.4..+1.0 by camera angle, lowered -1.3..-1.6)
@@ -141,7 +147,7 @@ class Step:
     say: str          # spoken instruction
     label: str        # short on-screen text (phone screen faces the patient)
     settle: float     # seconds from the prompt to the start of measuring: speaking time (macOS
-                      # `say`) + 2.5 s. On one person's webcam calibration (Nov 14 2026) the
+                      # `say`) + 2.5 s; stretched to fit a longer recorded clip (voice.py). On one person's webcam calibration (Nov 14 2026) the
                       # eyes moved ~2 s after the prompt ended; patients may be slower.
     measure: float = 0.0
     kind: str | None = None  # "gaze" | "arms" | "legs" | None
@@ -168,14 +174,48 @@ STEPS = (
          5.5, 5.0, "legs"),
     Step("legs_rest", "Thank you. Lower your legs.", "Lower your legs", 2.5),
 )
+DONE_OK = "That's all, thank you."
+DONE_FLAGGED = "That's all, thank you. A nurse has been told."
+STOPPED = "The check was stopped."
+# Pause after a prompt ends before measuring (see Step.settle), plus playback start latency.
+REACT_S, PLAY_LATENCY_S = 2.5, 0.3
+# Asked only when the first try at the eye steps wasn't clean (not followed, or a possible sign):
+# one try can't tell a palsy from eyes that just wandered (on sim, a patient ignoring the check
+# read as "abnormal" 17% of the time), but a palsy is fixed and shows up again.
+RETRY_STEPS = (
+    Step("center_2", "Let's do the eyes once more. Keep your head still, and only move your "
+                     "eyes. Look straight at the camera.", "Look straight at the camera", 7.0, 2.5,
+         "gaze"),
+    Step("look_left_2", "Without moving your head, look to your left.", "Look to your LEFT",
+         4.0, 4.0, "gaze"),
+    Step("look_right_2", "Now look to your right.", "Look to your RIGHT", 3.0, 4.0, "gaze"),
+)
 LEG_STEPS = ("legs", "legs_rest")
 LIMB_STEPS = ("arms", "arms_rest", *LEG_STEPS)
 COMPONENT_NAMES = {"eyes": "Eyes", "arms": "Arm drift", "legs": "Leg drift"}
 
 
-def _comp(status: str, detail: str, side: str | None = None, **values) -> dict:
-    """status: normal | abnormal | no_response | not_assessed | skipped."""
-    return {"status": status, "detail": detail, "side": side,
+GAZE_STEPS = ("center", "look_left", "look_right")
+GAZE_KEYS = (*GAZE_STEPS, *(s.key for s in RETRY_STEPS))
+NONCOMPLIANT = ("no_response", "inconclusive")
+
+
+def fit_to_voice(st: Step) -> Step:
+    """Measuring must not start before the patient has heard the whole instruction: with a
+    recorded voice (often slower and calmer than macOS `say`) wait for the clip to end."""
+    from .voice import seconds
+    secs = seconds(st.say)
+    if secs is None:
+        return st
+    return replace(st, settle=max(st.settle, round(secs + PLAY_LATENCY_S + REACT_S, 2)))
+
+
+def _comp(status: str, detail: str, side: str | None = None, issues: list[str] | None = None,
+          **values) -> dict:
+    """status: normal | abnormal | no_response | inconclusive | not_assessed | skipped.
+    inconclusive = the patient didn't follow the instructions well enough for a valid result
+    (`issues` says how); not_assessed = the camera couldn't measure it."""
+    return {"status": status, "detail": detail, "side": side, "issues": list(issues or []),
             "values": {k: (round(v, 3) if isinstance(v, float) else v) for k, v in values.items()}}
 
 
@@ -190,17 +230,21 @@ class ExamRunner:
         self.trigger = trigger
         self.gaze_center = gaze_center
         self.pose_error = pose_error
-        self.steps = [s for s in STEPS
+        self.steps = [fit_to_voice(s) for s in STEPS
                       if not (pose_error and s.key in LIMB_STEPS)
                       and not (not self.ec["legs"] and s.key in LEG_STEPS)]
         self.i = -1
         self.step_t0 = 0.0
         self.started_at: float | None = None
         self.last_t: float | None = None
-        self.data: dict[str, list] = {k: [] for k in ("center", "look_left", "look_right",
-                                                      "arms", "arms_pre", "legs", "legs_pre")}
-        self.turned = 0           # gaze-step frames lost to a turned head
-        self.yaws: dict[str, list[float]] = {"center": [], "look_left": [], "look_right": []}
+        self.data: dict[str, list] = {k: [] for k in (*GAZE_KEYS, "arms", "arms_pre", "legs",
+                                                      "legs_pre")}
+        self.yaws: dict[str, list[float]] = {k: [] for k in GAZE_KEYS}
+        # gaze-step frames while measuring, and why the eyes weren't measured in some of them
+        self.gaze_frames = {k: {"frames": 0, "closed": 0, "away": 0, "lost": 0}
+                            for k in GAZE_KEYS}
+        self.gaze_first: tuple[dict, dict] | None = None  # first try, if it was retried
+        self.blink_max = (cfg.get("vision") or {}).get("blink_max", 0.45)
         self.arm_frames = self.legs_seen = 0
         self.skipped: set[str] = set()
         self.finished = False
@@ -267,13 +311,18 @@ class ExamRunner:
         return out
 
     def _advance(self, t: float) -> list[str]:
+        if self.step is not None and self.step.key == "look_right" and self.gaze_first is None:
+            first = self._eval_gaze_pass("")
+            if first[0]["status"] in ("inconclusive", "abnormal"):
+                self.gaze_first = first
+                self.steps[self.i + 1:self.i + 1] = [fit_to_voice(s) for s in RETRY_STEPS]
         while True:
             self.i += 1
             if self.i >= len(self.steps):
                 self.result = self.evaluate(t)
                 self.finished = True
                 flagged = self.result["flagged"]
-                return ["That's all, thank you." + (" A nurse has been told." if flagged else "")]
+                return [DONE_FLAGGED if flagged else DONE_OK]
             st = self.steps[self.i]
             if st.key in LEG_STEPS and not self._legs_in_view():
                 self.skipped.add(st.key)
@@ -286,12 +335,20 @@ class ExamRunner:
 
     def _collect(self, st: Step, ff: FrameFeatures, pose: PoseFeatures | None):
         if st.kind == "gaze":
+            fr = self.gaze_frames[st.key]
+            fr["frames"] += 1
             if ff.yaw is not None:
                 self.yaws[st.key].append(ff.yaw)
             if ff.gaze_h is not None:
                 self.data[st.key].append(ff.gaze_h)
-            elif ff.reason == "head turned":
-                self.turned += 1
+            elif ff.yaw is None:
+                fr["lost"] += 1                      # no face
+            elif abs(ff.yaw) > self.gc["max_yaw_deg"]:
+                fr["away"] += 1                      # head turned too far for the eyes
+            elif ff.blink is not None and ff.blink > self.blink_max:
+                fr["closed"] += 1
+            else:
+                fr["lost"] += 1
         elif st.kind == "arms":
             self.data["arms"].append((ff.t, pose.arm_l if pose else None,
                                       pose.arm_r if pose else None, ff.blink))
@@ -315,8 +372,16 @@ class ExamRunner:
 
         findings = [f"{COMPONENT_NAMES[k]}: {c['detail']}" for k, c in comps.items()
                     if c["status"] == "abnormal"]
-        assessed = [c for c in comps.values() if c["status"] in ("normal", "abnormal", "no_response")]
-        no_response = bool(assessed) and all(c["status"] == "no_response" for c in assessed)
+        assessed = [c for c in comps.values()
+                    if c["status"] in ("normal", "abnormal", *NONCOMPLIANT)]
+        # Followed none of the instructions (possible confusion/aphasia). Needs two or more
+        # parts: one part alone not followed is reported as inconclusive, not alerted. Except
+        # when the eyes were the only part that could be checked at all (no pose model, limbs
+        # out of view): otherwise an eyes-only check could never alert on this.
+        only_part = len(assessed) == 1 and all(
+            c["status"] in ("not_assessed", "skipped") for k, c in comps.items() if k != "eyes")
+        no_response = ((len(assessed) >= 2 or only_part)
+                       and all(c["status"] in NONCOMPLIANT for c in assessed))
         if no_response and self.ec["alert_on_no_response"]:
             findings.append("Did not follow the check's instructions "
                             "(possible confusion, aphasia or weakness)")
@@ -324,62 +389,259 @@ class ExamRunner:
         weak = sides.pop() if len(sides) == 1 else ("both/mixed" if sides else None)
         not_done = [COMPONENT_NAMES[k].lower() for k, c in comps.items()
                     if c["status"] in ("not_assessed", "skipped")]
-        summary = "; ".join(findings) if findings else "No abnormal findings"
-        return {"trigger": self.trigger, "started_at": self.started_at, "finished_at": t,
-                "components": comps, "findings": findings, "flagged": bool(findings),
-                "abnormal": any(c["status"] == "abnormal" for c in comps.values()),
-                "no_response": no_response, "weak_side": weak, "summary": summary,
-                "not_assessed": not_done}
+        inconclusive = [k for k, c in comps.items() if c["status"] == "inconclusive"]
+        notes = [f"{COMPONENT_NAMES[k]} check inconclusive, instructions not followed: "
+                 f"{'; '.join(comps[k]['issues']) or comps[k]['detail']}" for k in inconclusive]
+        if findings:
+            summary = "; ".join(findings)
+            if inconclusive and not no_response:
+                summary += f"; {self._names(inconclusive)} inconclusive (instructions not followed)"
+        elif inconclusive:
+            summary = "; ".join(f"{COMPONENT_NAMES[k]} inconclusive, instructions not followed: "
+                                f"{'; '.join(comps[k]['issues']) or comps[k]['detail']}"
+                                for k in inconclusive)
+            ok = [COMPONENT_NAMES[k].lower() for k, c in comps.items() if c["status"] == "normal"]
+            if ok:
+                summary += f". Normal: {', '.join(ok)}"
+        else:
+            summary = "No abnormal findings"
+        res = {"trigger": self.trigger, "started_at": self.started_at, "finished_at": t,
+               "components": comps, "findings": findings, "flagged": bool(findings),
+               "abnormal": any(c["status"] == "abnormal" for c in comps.values()),
+               "no_response": no_response, "weak_side": weak, "summary": summary,
+               "not_assessed": not_done, "inconclusive": inconclusive, "notes": notes}
+        # hedged "may be a right hemispheric stroke" wording (beds.py redoes it with the face)
+        res["localization"] = localize(None, res)
+        return res
+
+    @staticmethod
+    def _names(keys: list[str]) -> str:
+        n = [COMPONENT_NAMES[k] for k in keys]
+        return n[0] if len(n) == 1 else ", ".join(n[:-1]) + " and " + n[-1]
+
+    def _gaze_step(self, key: str) -> dict:
+        """How one gaze step went: tracked enough? where did the eyes settle, and for how much
+        of the step (fixation = the most samples within +-gaze_hold_tol of one position; a
+        late start or one glance back at the screen still leaves most samples in it)."""
+        ec, vals = self.ec, np.sort(np.array(self.data[key], dtype=float))
+        fr = self.gaze_frames[key]
+        frames = max(fr["frames"], len(vals))
+        seen = len(vals) >= max(ec["min_samples"], ec["gaze_min_coverage"] * frames)
+        why = None
+        if not seen:
+            miss = max(frames - len(vals), 1)
+            why = max(("closed", "away", "lost"), key=lambda k: fr[k])
+            if fr[why] < 0.5 * miss:
+                why = "lost"
+        hold, pos = 0.0, None
+        if len(vals):
+            ends = np.searchsorted(vals, vals + 2 * ec["gaze_hold_tol"], side="right")
+            i = int(np.argmax(ends - np.arange(len(vals))))
+            hold = float(ends[i] - i) / len(vals)
+            pos = float(np.median(vals[i:ends[i]]))
+        yaws = self.yaws[key]
+        return {"n": len(vals), "frames": frames, "seen": seen, "why": why, "hold": hold,
+                "pos": pos, "steady": seen and hold >= ec["gaze_hold_min"],
+                "yaw": float(np.median(yaws)) if yaws else None}
 
     def _eval_gaze(self) -> dict:
-        ec, n = self.ec, self.ec["min_samples"]
-        d = self.data
-        if len(d["look_left"]) < n or len(d["look_right"]) < n:
-            why = "head turned instead of the eyes" if self.turned >= n else \
-                "eyes not tracked (face out of view or eyes closed)"
-            return _comp("not_assessed", why)
-        measured_center = float(np.median(d["center"])) if len(d["center"]) >= n else None
-        # Excursions are measured from where the eyes went when asked to look straight, unless
-        # that is itself deviated from the patient's usual centre (then the eyes can't look
-        # straight, and the usual centre is the fairer reference).
-        if measured_center is not None and (self.gaze_center is None or abs(
-                measured_center - self.gaze_center) < self.gc["deviation"]):
-            ref = measured_center
+        """One clean try decides. Otherwise (a retry was asked) a sign counts only if both
+        tries show it; a first try that wasn't followed is forgiven if the second one was."""
+        if self.gaze_first is None:
+            return self._eval_gaze_pass("")[0]
+        (c1, s1), (c2, s2) = self.gaze_first, self._eval_gaze_pass("_2")
+        first = f"1st try {c1['status'].replace('_', ' ')}: {c1['detail']}"
+        if c2["status"] == "normal":
+            return {**c2, "detail": f"{c2['detail']} on the 2nd try ({first})"}
+        if c2["status"] == "abnormal" and c1["status"] in ("abnormal", "inconclusive"):
+            keep = [k for k in ("palsy", "deviation")
+                    if s2.get(k) and s1.get(k) and s2[k][0] == s1[k][0]]
+            if keep:
+                side = s2["palsy"][0] if "palsy" in keep else other(s2["deviation"][0])
+                return _comp("abnormal", "; ".join(s2[k][1] for k in keep) + " (on both tries)",
+                             side, issues=c2["issues"], **c2["values"])
+        both = [m for m in c1["issues"] if m in c2["issues"]]
+        issues = [f"{m} (both tries)" for m in both] \
+            + [f"1st try: {m}" for m in c1["issues"] if m not in both] \
+            + [f"2nd try: {m}" for m in c2["issues"] if m not in both]
+        if c2["status"] == "abnormal":
+            why = (f"possible sign on the 2nd try only, not seen on the 1st: {c2['detail']}"
+                   if c1["status"] != "abnormal" else
+                   f"the two tries disagree ({first}; 2nd try: {c2['detail']})")
+            return _comp("inconclusive", why, issues=issues or [why], **c2["values"])
+        if c1["status"] == "abnormal":
+            why = f"possible sign on the 1st try ({c1['detail']}) not confirmed, 2nd try " \
+                  f"{c2['status'].replace('_', ' ')}: {c2['detail']}"
+            return _comp("inconclusive", why, issues=issues or [why], **c2["values"])
+        if c2["status"] == "not_assessed":
+            return _comp("inconclusive", f"{first}; 2nd try: {c2['detail']}",
+                         issues=issues, **c1["values"])
+        return _comp("inconclusive", "instructions not followed on either try: "
+                     + "; ".join(issues), issues=issues, **c2["values"])
+
+    def _eval_gaze_pass(self, sfx: str) -> tuple[dict, dict]:
+        """Gaze palsy / fixed deviation from one try (keys center{sfx}, look_left{sfx}, ...),
+        but only if the patient followed it. Not following (eyes closed, head turned away,
+        eyes wandering, looking the wrong way, barely moving) -> "inconclusive" with the
+        reasons, never "normal" or "abnormal". Also returns the signs seen, for comparing
+        tries: {"palsy": (weak side, text), "deviation": (side, text)}."""
+        ec, gc = self.ec, self.gc
+        st = {k: self._gaze_step(k + sfx) for k in GAZE_STEPS}
+        word = {"center": "look straight at the camera", "look_left": "look left",
+                "look_right": "look right"}
+        side_of = {"look_left": "left", "look_right": "right"}
+        hard: list[str] = []   # the check wasn't followed: no verdict at all
+        soft: dict[str, list[str]] = {"center": [], "look_left": [], "look_right": []}
+
+        # 1. Were the eyes measurable in the look steps, and if not, was that the patient's doing?
+        unseen = [k for k in ("look_left", "look_right") if not st[k]["seen"]]
+        for k in unseen:
+            if st[k]["why"] == "closed":
+                hard.append(f"kept the eyes closed when asked to {word[k]}")
+            elif st[k]["why"] == "away":
+                hard.append(f"turned the head away when asked to {word[k]}")
+        if unseen:
+            if hard:
+                return _comp("inconclusive", "instructions not followed: " + "; ".join(hard),
+                             issues=hard), {}
+            return _comp("not_assessed", "eyes not tracked (face out of view or poor lighting)"), {}
+
+        # 2. Reference = where the eyes settled when asked to look straight, if they settled
+        # there and it isn't itself deviated from the patient's usual centre (then the eyes
+        # can't look straight and the usual centre is the fairer reference).
+        c = st["center"]
+        mc = c["pos"] if c["steady"] else None
+        if not c["seen"]:
+            soft["center"].append(
+                "kept the eyes closed when asked to look straight at the camera"
+                if c["why"] == "closed" else "eyes not seen when asked to look straight")
+        elif not c["steady"]:
+            soft["center"].append(f"eyes kept moving when asked to look straight at the camera "
+                                  f"(held still {c['hold']:.0%} of the time)")
+        if mc is not None and (self.gaze_center is None
+                               or abs(mc - self.gaze_center) < gc["deviation"]):
+            ref = mc
         else:
             ref = self.gaze_center if self.gaze_center is not None else 0.0
-        ex_l = float(np.percentile(d["look_left"], 80)) - ref
-        ex_r = ref - float(np.percentile(d["look_right"], 20))
-        # Head turn toward each side (yaw + = toward the patient's left), vs the straight step.
-        ymed = {k: float(np.median(v)) if v else None for k, v in self.yaws.items()}
-        y0 = ymed["center"] if ymed["center"] is not None else 0.0
-        head_l = None if ymed["look_left"] is None else ymed["look_left"] - y0
-        head_r = None if ymed["look_right"] is None else y0 - ymed["look_right"]
-        vals = dict(left=ex_l, right=ex_r, reference=ref, head_left=head_l, head_right=head_r)
-        if measured_center is not None and self.gaze_center is not None:
-            vals["straight"] = measured_center - self.gaze_center
+        has_ref = mc is not None or self.gaze_center is not None
+        start = mc if mc is not None else ref   # where a look step's movement starts from
+
+        # 3. Did each look step go the asked way and stay there?
+        def wrong_way() -> list[str]:
+            return [k for k, sg in (("look_left", 1.0), ("look_right", -1.0))
+                    if sg * (st[k]["pos"] - start) <= -ec["gaze_wrong_way"]]
+        wrong = wrong_way()
+        # Opposite way BOTH times = left and right mixed up, but the eyes still went one way and
+        # then the other, which is all the check needs: judge each side by where the eyes
+        # actually went. (Both steps to the same side stays "not followed", below.)
+        swapped = len(wrong) == 2
+        if swapped:
+            st["look_left"], st["look_right"] = st["look_right"], st["look_left"]
+            word.update(look_left="look right (looked left instead)",
+                        look_right="look left (looked right instead)")
+            wrong = wrong_way()
+        for k in ("look_left", "look_right"):
+            if k not in wrong and not st[k]["steady"]:
+                hard.append(f"eyes kept moving instead of looking {side_of[k]} "
+                            f"(held still {st[k]['hold']:.0%} of the time)")
+        if wrong:
+            k = wrong[0]
+            hard.append(f"looked {side_of['look_right' if k == 'look_left' else 'look_left']} "
+                        f"when asked to look {side_of[k]}")
+
+        p = st["look_left"]["n"], st["look_right"]["n"]
+        # Excursion = where the eyes stayed (the fixation), not their extreme: eyes roaming
+        # around pass through a side without holding it.
+        ex_l = st["look_left"]["pos"] - ref
+        ex_r = ref - st["look_right"]["pos"]
         big, small = max(ex_l, ex_r), min(ex_l, ex_r)
-        if big < ec["gaze_min_excursion"]:
-            return _comp("no_response", "eyes did not move to either side", **vals)
-        problems, side = [], None
+        # moved at all between instructions? (staring at one spot, e.g. a TV, can otherwise
+        # read as a fixed deviation + palsy)
+        moved = max(st["look_left"]["pos"] - start, start - st["look_right"]["pos"])
+        forced = None  # side the eyes stayed turned to through every instruction
+        if not wrong:
+            if moved < ec["gaze_min_excursion"] or big < ec["gaze_min_excursion"]:
+                held = start - (self.gaze_center if self.gaze_center is not None else 0.0)
+                # Eyes held to one side through every instruction is not "not following": a
+                # large hemispheric stroke can lock both eyes toward the lesion (forced gaze
+                # deviation, NIHSS gaze 2), often with aphasia/neglect so the patient can't
+                # follow either. A sign (rare false alarm: staring at a TV, ignoring the voice).
+                # Eyes stuck in the MIDDLE is no sign: still "not followed".
+                off = [st[k]["pos"] - self.gaze_center for k in GAZE_STEPS
+                       if self.gaze_center is not None and st[k]["seen"]]
+                if len(off) == 3 and (all(d >= gc["deviation"] for d in off)
+                                      or all(d <= -gc["deviation"] for d in off)):
+                    forced = "LEFT" if held > 0 else "RIGHT"
+                else:
+                    where = f" (kept looking {'left' if held > 0 else 'right'})" \
+                        if abs(held) >= gc["deviation"] else ""
+                    hard.append(f"eyes stayed in the same place for every instruction{where}")
+            elif big < ec["gaze_full_excursion"]:
+                hard.append(f"eyes moved only slightly to either side ({big:.2f}, "
+                            f"at least {ec['gaze_full_excursion']:.2f} expected)")
+
+        # 4. Head kept still? (head turn toward the patient's left = + yaw)
+        y0 = st["center"]["yaw"] if st["center"]["yaw"] is not None else 0.0
+        head = {}
+        for k in ("look_left", "look_right"):
+            y = st[k]["yaw"]
+            head[k] = None if y is None else y - y0
+            if head[k] is not None and abs(head[k]) >= ec["head_turn_deg"]:
+                soft[k].append(f"moved the head when asked to {word[k]} "
+                               f"({abs(head[k]):.0f} deg {'left' if head[k] > 0 else 'right'})")
+        vals = dict(left=ex_l, right=ex_r, reference=ref,
+                    head_left=head["look_left"], head_right=head["look_right"],
+                    held_center=c["hold"], held_left=st["look_left"]["hold"],
+                    held_right=st["look_right"]["hold"], samples_left=p[0], samples_right=p[1],
+                    swapped=swapped)
+        if mc is not None and self.gaze_center is not None:
+            vals["straight"] = mc - self.gaze_center
+        all_soft = [m for k in GAZE_STEPS for m in soft[k]]
+        if hard:
+            issues = hard + all_soft
+            return _comp("inconclusive", "instructions not followed: " + "; ".join(issues),
+                         issues=issues, **vals), {}
+
+        if forced:  # eyes never left one side: palsy/excursion comparisons mean nothing here
+            sign = (f"eyes stayed turned to the {forced.lower()} through every instruction "
+                    f"(possible forced gaze deviation)")
+            note = f" (note: {'; '.join(all_soft)})" if all_soft else ""
+            # same key as a deviation when looking ahead, so the two tries can confirm each other
+            return _comp("abnormal", sign + note, other(forced), issues=all_soft, forced=True,
+                         **vals), {"deviation": (forced, sign)}
+
+        # 5. Verdict from a followed check. A sign must not rest on a step that wasn't followed.
+        problems, side, doubts, signs = [], None, [], {}
         if small < ec["gaze_ratio"] * big:
             weak = "LEFT" if ex_l < ex_r else "RIGHT"
-            turn = head_l if weak == "LEFT" else head_r
-            if turn is not None and turn >= ec["head_turn_deg"]:
-                # live test: the head did the looking, the eyes stayed put -> not a palsy sign
-                return _comp("not_assessed", f"turned the head to the {weak.lower()} "
-                                             f"({turn:.0f} deg) instead of moving only the eyes",
-                             **vals)
-            side = weak
-            problems.append(f"cannot look fully to the {side.lower()} "
-                            f"(moved {max(small, 0):.2f} vs {big:.2f} to the {other(side).lower()})")
-        if self.gaze_center is not None and measured_center is not None \
-                and abs(measured_center - ref) >= self.gc["deviation"]:
-            dev = "LEFT" if measured_center > ref else "RIGHT"
-            problems.append(f"eyes stay turned to the {dev.lower()} when asked to look ahead")
+            k = f"look_{weak.lower()}"
+            sign = (f"cannot look fully to the {weak.lower()} (moved {max(small, 0):.2f} vs "
+                    f"{big:.2f} to the {other(weak).lower()})")
+            signs["palsy"] = (weak, sign)
+            why_not = soft[k] + ([] if has_ref else soft["center"])
+            if why_not:
+                doubts += [sign]
+                all_soft = why_not + [m for m in all_soft if m not in why_not]
+            else:
+                side = weak
+                problems.append(sign)
+        if mc is not None and self.gaze_center is not None and abs(mc - ref) >= gc["deviation"]:
+            dev = "LEFT" if mc > ref else "RIGHT"
+            signs["deviation"] = (dev, f"eyes stay turned to the {dev.lower()} when asked to "
+                                       f"look ahead")
+            problems.append(signs["deviation"][1])
             side = side or other(dev)  # eyes deviate away from the weak side
+        info = all_soft + (["mixed up left and right (looked right first), judged by where the "
+                            "eyes went"] if swapped else [])
+        note = f" (note: {'; '.join(info)})" if info else ""
         if problems:
-            return _comp("abnormal", "; ".join(problems), side, **vals)
-        return _comp("normal", "full eye movement to both sides", **vals)
+            return _comp("abnormal", "; ".join(problems) + note, side, issues=all_soft, **vals), signs
+        if doubts:
+            return _comp("inconclusive", f"instructions not followed: {'; '.join(all_soft)}, so "
+                                         f"a possible sign can't be trusted ({doubts[0]})",
+                         issues=all_soft, **vals), signs
+        return _comp("normal", "full eye movement to both sides" + note, issues=all_soft,
+                     **vals), signs
 
     @staticmethod
     def _start_end(series: list[tuple[float, float]]) -> tuple[float, float]:
@@ -514,11 +776,13 @@ class ExamRunner:
 
 # ============================================================================ speaker
 class ServerVoice:
-    """Speaks on this computer (macOS `say`, else espeak/spd-say) for webcam beds.
-    A new prompt cuts off the previous one."""
+    """Speaks on the server computer for webcam beds (off by default: the bed page plays the
+    prompts in the browser instead). Plays the recorded clip (macOS `afplay`) if there is one,
+    else macOS `say` / espeak / spd-say. A new prompt cuts off the previous one."""
 
     def __init__(self, enabled: bool = True):
         self.cmd = None
+        self.player = shutil.which("afplay") if enabled else None
         if enabled:
             for c in ("say", "espeak-ng", "espeak", "spd-say"):
                 if shutil.which(c):
@@ -528,16 +792,22 @@ class ServerVoice:
         self._lock = threading.Lock()
 
     def say(self, text: str):
-        if not self.cmd or not text:
+        if not text:
+            return
+        from .voice import clip_path
+        clip = clip_path(text)
+        argv = ([self.player, str(clip)] if self.player and clip and clip.exists()
+                else [self.cmd, text] if self.cmd else None)
+        if argv is None:
             return
         with self._lock:
             if self._proc and self._proc.poll() is None:
                 self._proc.terminate()
             try:
-                self._proc = subprocess.Popen([self.cmd, text], stdout=subprocess.DEVNULL,
+                self._proc = subprocess.Popen(argv, stdout=subprocess.DEVNULL,
                                               stderr=subprocess.DEVNULL)
             except OSError:
-                self.cmd = None
+                self.cmd = self.player = None
 
 
 # ============================================================================ self-test
@@ -575,6 +845,9 @@ def _selftest():
     assert res["components"]["eyes"]["status"] == "abnormal", res["components"]["eyes"]
     assert res["components"]["arms"]["status"] == "abnormal", res["components"]["arms"]
     assert res["components"]["arms"]["side"] == "LEFT" and res["weak_side"] == "LEFT"
+    # left-sided signs (eyes can't look left) -> possible RIGHT hemispheric stroke
+    assert res["localization"]["hemisphere"] == "RIGHT", res["localization"]
+    print("  ->", res["localization"]["text"])
     assert said[-1].endswith("A nurse has been told.")
 
     # late raiser: both arms still rising when measuring starts, then the left sinks
@@ -589,13 +862,91 @@ def _selftest():
     print("late raiser:", arms["status"], "-", arms["detail"])
     assert arms["status"] == "abnormal" and arms["side"] == "LEFT", arms
 
+    # ---- gaze: only a followed check gives a verdict
+    def gaze_case(center, left, right, yaws=None, closed=0, frames=None):
+        e = ExamRunner(cfg, "selftest", gaze_center=0.0)
+        r = np.random.default_rng(3)
+        for k, v in (("center", center), ("look_left", left), ("look_right", right)):
+            v = v if callable(v) else (lambda x: (lambda i: x))(v)
+            e.data[k] = [v(i) + float(r.normal(0, 0.008)) for i in range(40) if v(i) is not None]
+            e.gaze_frames[k].update(frames=frames or 40, closed=closed if k != "center" else 0)
+            e.yaws[k] = [(yaws or {}).get(k, 0.0)] * 40
+        return e._eval_gaze_pass("")[0]
+
+    def expect(name, c, status):
+        print(f"gaze {name}: {c['status']} - {c['detail']}")
+        assert c["status"] == status, c
+
+    expect("followed", gaze_case(0.0, 0.18, -0.18), "normal")
+    expect("palsy left", gaze_case(0.0, 0.02, -0.18), "abnormal")
     # live run 2: looked left by turning the head, eyes stayed centred -> not a palsy
-    e = ExamRunner(cfg, "selftest", gaze_center=0.0)
-    e.data.update(center=[0.0] * 30, look_left=[0.01] * 30, look_right=[-0.15] * 30)
-    e.yaws.update(center=[0.0] * 30, look_left=[12.0] * 30, look_right=[-2.0] * 30)
-    c = e._eval_gaze()
-    print("head turned instead of eyes:", c["status"], "-", c["detail"])
-    assert c["status"] == "not_assessed", c
+    expect("head turned instead of eyes", gaze_case(
+        0.0, 0.01, -0.15, yaws={"look_left": 12.0, "look_right": -2.0}), "inconclusive")
+    expect("looked the wrong way", gaze_case(0.0, -0.15, -0.18), "inconclusive")
+    # left and right mixed up (right first, then left): still both directions -> judged
+    expect("left/right mixed up", gaze_case(0.0, -0.17, 0.17), "normal")
+    expect("mixed up, can't look left", gaze_case(0.0, -0.18, 0.07), "abnormal")
+    expect("barely moved", gaze_case(0.0, 0.05, -0.05), "inconclusive")
+    expect("did not move", gaze_case(0.0, 0.01, -0.01), "inconclusive")
+    # eyes held to one side through every instruction: possible forced gaze deviation (a sign;
+    # weak side = the other side). Eyes stuck in the middle stay "not followed" (above).
+    c = gaze_case(0.12, 0.12, 0.12)
+    expect("eyes held left throughout", c, "abnormal")
+    assert c["side"] == "RIGHT", c
+    c = gaze_case(-0.15, -0.14, -0.16)
+    expect("eyes held right throughout", c, "abnormal")
+    assert c["side"] == "LEFT", c
+    expect("held right, then looked left", gaze_case(-0.15, 0.05, -0.16), "abnormal")
+    scan = lambda i: 0.14 * np.sin(i / 2.2)  # noqa: E731  eyes sweeping around the room
+    expect("eyes wandering", gaze_case(scan, scan, scan), "inconclusive")
+    expect("eyes closed", gaze_case(0.0, lambda i: None, lambda i: None, closed=40),
+           "inconclusive")
+    expect("face lost (camera problem)", gaze_case(0.0, lambda i: None, lambda i: None),
+           "not_assessed")
+    # slow responder (eyes move 1.5 s into measuring) and one glance back at the screen: fine
+    late = lambda x: (lambda i: 0.0 if i < 15 else x)  # noqa: E731
+    expect("slow responder", gaze_case(0.0, late(0.18), late(-0.18)), "normal")
+    glance = lambda i: 0.0 if 20 <= i < 26 else 0.18  # noqa: E731
+    expect("glanced back once", gaze_case(0.0, glance, -0.18), "normal")
+    # unsteady "look straight" + asymmetry, with a patient centre to fall back on: still a sign
+    expect("unsteady centre, palsy", gaze_case(scan, 0.02, -0.18), "abnormal")
+
+    # a patient ignoring the whole check (eyes roam, arms never move), through the real runner
+    class Ignores(SimScenario):
+        def gaze(self, el, rng, cue):
+            return super().gaze(el, rng, None)
+
+        def pose(self, t, el, cue, rng):
+            return super().pose(t, el, None, rng)
+    res, _ = _run_sim(Ignores(label="ignores"), cfg, el0=50)
+    print("ignores the check:", res["summary"], "|",
+          {k: c["status"] for k, c in res["components"].items()})
+    assert res["components"]["eyes"]["status"] in ("inconclusive", "not_assessed"), res
+    assert not res["abnormal"], res
+
+    # forced gaze deviation through the real runner: eyes stay right whatever is asked, on
+    # both tries -> eyes abnormal, weak side LEFT, alert
+    class Forced(SimScenario):
+        def gaze(self, el, rng, cue):
+            return -0.15 + float(rng.normal(0, 0.008))
+    res, said = _run_sim(Forced(label="forced"), cfg, el0=50)
+    eyes = res["components"]["eyes"]
+    print("forced gaze deviation:", eyes["status"], "-", eyes["detail"])
+    assert eyes["status"] == "abnormal" and eyes["side"] == "LEFT", eyes
+    assert "both tries" in eyes["detail"] and res["flagged"], res
+    assert any(x.startswith("Let's do the eyes once more") for x in said), said
+
+    # eyes the only part that could be checked (no pose model) and not followed: alert too
+    e = ExamRunner(cfg, "selftest", gaze_center=0.0, pose_error="pose model missing")
+    rr = np.random.default_rng(4)
+    for k in GAZE_STEPS:
+        e.data[k] = [0.14 * np.sin(i / 2.2) + float(rr.normal(0, 0.008)) for i in range(40)]
+        e.gaze_frames[k].update(frames=40)
+        e.yaws[k] = [0.0] * 40
+    res = e.evaluate(10.0)
+    print("eyes-only, not followed:", res["summary"])
+    assert res["components"]["eyes"]["status"] == "inconclusive", res
+    assert res["no_response"] and res["flagged"], res
 
     # patterns from the first live run: flipping tracking, and both arms lowered together
     def arms_case(left, right):

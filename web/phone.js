@@ -36,14 +36,7 @@ function setState(state, text) {
   $("state").className = `state ${state}`;
   $("state").textContent = text;
 }
-function say(text) {
-  try {
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "en-US"; u.rate = 0.95;
-    speechSynthesis.cancel();
-    speechSynthesis.speak(u);
-  } catch (e) { /* no speech support */ }
-}
+function say(text) { Voice.say(text); }  // recorded clip or browser voice, see voice.js
 function renderFacing() {
   $("cam-user").classList.toggle("on", facing === "user");
   $("cam-env").classList.toggle("on", facing === "environment");
@@ -67,7 +60,7 @@ let promptTimer = null;  // hides the check's "done" prompt after a few seconds
 function renderPrompt() {
   const p = exam || (calPrompt && { step: null, text: calPrompt });
   $("prompt").hidden = !p;
-  $("prompt-arrow").textContent = (p && p.step && facing === "user" && ARROWS[p.step]) || "";
+  $("prompt-arrow").textContent = (p && p.step && facing === "user" && ARROWS[p.step.replace(/_2$/, "")]) || "";
   $("prompt-text").textContent = p ? p.text : "";
 }
 
