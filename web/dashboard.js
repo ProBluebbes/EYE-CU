@@ -26,8 +26,9 @@ function makeTile(bed) {
   a.href = `/bed/${encodeURIComponent(bed.bed_id)}`;
   const head = el("div", "tile-head");
   const name = el("span", "tile-name", bed.bed_name);
-  const kind = el("span", `kind-badge ${bed.kind}`, { sim: "SIM", phone: "PHONE" }[bed.kind] || "");
+  const kind = el("span", `kind-badge ${bed.kind}`, { sim: "SIM", phone: "PHONE", demo: "DEMO" }[bed.kind] || "");
   kind.hidden = !kind.textContent;
+  if (bed.demo_clip) kind.title = `Demo video: ${bed.demo_clip}`;
   const pill = el("span", "pill");
   head.append(name, kind, pill);
 
@@ -62,7 +63,7 @@ function alertHeadline(a) {
 }
 // A BE-FAST check part the patient didn't follow (eyes wandered, looked the wrong way, ...).
 const inconclusive = (le) => !!(le && !le.cancelled && le.inconclusive && le.inconclusive.length);
-const PART_NAMES = { eyes: "eyes", arms: "arms", legs: "legs" };
+const PART_NAMES = { eyes: "eyes", arms: "arms" };
 const inconclusiveText = (le) =>
   `${le.inconclusive.map((k) => PART_NAMES[k] || k).join(" + ")} inconclusive (instructions not followed)`;
 const SCALE = 1.5; // score bar spans 0 .. 1.5 x threshold
@@ -318,12 +319,54 @@ async function renderModal() {
     el("p", "muted", "Links contain a secret key and change every time the server restarts. Anyone with them can see the cameras, so only share them with the team."));
 }
 
+// ---------------------------------------------------------------- add demo (recorded video)
+$("add-demo").onclick = async () => {
+  $("demo-modal").hidden = false;
+  $("demo-msg").textContent = "";
+  const sel = $("demo-select");
+  sel.replaceChildren();
+  try {
+    const r = await fetch("/api/demos");
+    const { demos, folder } = await r.json();
+    for (const name of demos) {
+      const o = el("option", null, name);
+      o.value = name;
+      sel.append(o);
+    }
+    $("demo-add").disabled = !demos.length;
+    if (!demos.length) $("demo-msg").textContent = `No demo videos found in ${folder}/.`;
+  } catch {
+    $("demo-msg").textContent = "Could not load the demo list.";
+  }
+};
+$("demo-close").onclick = () => { $("demo-modal").hidden = true; };
+$("demo-modal").onclick = (e) => { if (e.target === $("demo-modal")) $("demo-modal").hidden = true; };
+$("demo-add").onclick = async () => {
+  const b = $("demo-add");
+  b.disabled = true;
+  $("demo-msg").textContent = "Adding…";
+  try {
+    const r = await fetch("/api/demos", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: $("demo-select").value }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    $("demo-msg").textContent = "";
+    $("demo-modal").hidden = true;
+  } catch (e) {
+    $("demo-msg").textContent = `Could not add the demo: ${e.message}`;
+  } finally {
+    b.disabled = false;
+  }
+};
+
 // ---------------------------------------------------------------- websocket
 function render() {
   clockSkew = state.server_time - Date.now() / 1000;
   for (const bed of state.beds) renderTile(bed);
   const ids = new Set(state.beds.map((b) => b.bed_id));
-  for (const [id, t] of tiles) {  // phone removed
+  for (const [id, t] of tiles) {  // phone or demo removed
     if (!ids.has(id)) { t.el.remove(); if (t.url) URL.revokeObjectURL(t.url); tiles.delete(id); }
   }
   renderModal();

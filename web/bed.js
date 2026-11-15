@@ -2,7 +2,15 @@ const WINDOW_S = 60;
 const $ = (id) => document.getElementById(id);
 const BED = decodeURIComponent(location.pathname.split("/").filter(Boolean)[1] || "");
 const API = `/api/beds/${encodeURIComponent(BED)}`;
-$("video").src = `${API}/video`;
+// Landmark lines and dots on the video: on each time the page opens, toggled with the button.
+let overlay = true;
+function setVideo() {
+  $("video").src = `${API}/video?overlay=${overlay ? 1 : 0}`;
+  $("overlay-toggle").textContent = overlay ? "Hide landmarks" : "Show landmarks";
+  $("overlay-toggle").setAttribute("aria-pressed", String(overlay));
+}
+$("overlay-toggle").addEventListener("click", () => { overlay = !overlay; setVideo(); });
+setVideo();
 const banner = $("banner"), bannerText = $("banner-text");
 let lastState = null, t0 = null, lastChartUpdate = 0;
 
@@ -57,10 +65,12 @@ function render(st) {
   $("banner-sub").hidden = true;
   $("bed-name").textContent = st.bed_name;
   document.title = `StrokeWatch: ${st.bed_name}`;
-  $("bed-kind").textContent = { sim: "SIM", phone: "PHONE" }[st.kind] || "";
+  $("bed-kind").textContent = { sim: "SIM", phone: "PHONE", demo: "DEMO" }[st.kind] || "";
   $("bed-kind").hidden = !$("bed-kind").textContent;
-  $("phone-actions").hidden = st.kind !== "phone";
-  $("sound-row").hidden = st.kind !== "camera";
+  $("phone-actions").hidden = st.kind !== "phone" && st.kind !== "demo";
+  $("say-test").hidden = st.kind !== "phone";
+  $("remove").textContent = st.kind === "demo" ? "Remove this demo" : "Remove this phone";
+  $("sound-row").hidden = st.kind !== "camera" && st.kind !== "demo";
   banner.className = `banner ${st.state}`;
   if (st.state === "offline") {
     const age = st.last_frame_age == null ? "" : ` (last frame ${Math.round(st.last_frame_age)} s ago)`;
@@ -80,7 +90,7 @@ function render(st) {
     $("progress").style.width = `${st.baseline_progress * 100}%`;
   } else if (st.state === "monitoring" && st.exam && st.exam.active) {
     banner.className = "banner exam";
-    bannerText.textContent = `BE-FAST check: ${st.exam.label}`;
+    bannerText.textContent = `${st.exam.only === "arms" ? "Hand test" : "BE-FAST check"}: ${st.exam.label}`;
   } else if (st.state === "monitoring") {
     const cal = st.calibrated_range ? ` (calibrated for turns ${st.calibrated_range[0]}° to ${st.calibrated_range[1]}°)` : "";
     bannerText.textContent = `Monitoring: no new droop${cal}`;
@@ -131,7 +141,7 @@ function renderZ(st) {
 }
 
 // ---------------------------------------------------------------- BE-FAST check
-const COMP_NAMES = { eyes: "Eyes", arms: "Arm drift", legs: "Leg drift" };
+const COMP_NAMES = { eyes: "Eyes", arms: "Arm drift" };
 const ST_TEXT = { normal: "normal", abnormal: "ABNORMAL", no_response: "no response",
                   inconclusive: "INCONCLUSIVE", not_assessed: "not assessed", skipped: "skipped" };
 let examSig = "";
@@ -140,8 +150,9 @@ function renderExam(st) {
   const ex = st.exam || { active: false };
   $("exam-live").hidden = !ex.active;
   $("exam-start").hidden = ex.active;
+  $("hand-start").hidden = ex.active;
   $("exam-cancel").hidden = !ex.active;
-  $("exam-start").disabled = st.state === "offline";
+  $("exam-start").disabled = $("hand-start").disabled = st.state === "offline";
   if (ex.active) {
     $("exam-idx").textContent = `step ${ex.index}/${ex.count} · ${ex.phase}`;
     $("exam-label").textContent = ex.label;
@@ -154,13 +165,14 @@ function renderExam(st) {
   if (sig !== examSig) {
     examSig = sig;
     const box = $("exam-result");
+    const what = r && r.only === "arms" ? "Last hand test" : "Last check";
     if (!r) box.innerHTML = '<span class="muted">Starts by itself on facial droop or a fixed gaze, or run it now.</span>';
-    else if (r.cancelled) box.innerHTML = `<div class="exam-head">Last check ${fmtTime(r.finished_at)}: stopped (${esc(r.cancelled)})</div>`;
+    else if (r.cancelled) box.innerHTML = `<div class="exam-head">${what} ${fmtTime(r.finished_at)}: stopped (${esc(r.cancelled)})</div>`;
     else {
       const rows = Object.entries(r.components).map(([k, c]) =>
         `<div class="comp"><span>${COMP_NAMES[k] || k}</span><span class="st ${c.status}">${ST_TEXT[c.status] || c.status}</span><span>${esc(c.detail)}</span></div>`).join("");
       const head = r.flagged ? "flagged" : (r.inconclusive || []).length ? "inconclusive" : "";
-      box.innerHTML = `<div class="exam-head ${head}">Last check ${fmtTime(r.finished_at)}: ${esc(r.summary)}</div>
+      box.innerHTML = `<div class="exam-head ${head}">${what} ${fmtTime(r.finished_at)}: ${esc(r.summary)}</div>
         <div class="muted" style="font-size:14px;margin-bottom:4px">reason: ${esc(r.trigger)}${r.localization ? ` · ${esc(r.localization.text)} ${esc(r.localization.caveat)}` : ""}</div>${rows}`;
     }
   }
@@ -198,6 +210,7 @@ function esc(s) {
 }
 
 $("exam-start").addEventListener("click", () => fetch(`${API}/exam`, { method: "POST" }));
+$("hand-start").addEventListener("click", () => fetch(`${API}/exam?only=arms`, { method: "POST" }));
 $("exam-cancel").addEventListener("click", () => fetch(`${API}/exam/cancel`, { method: "POST" }));
 
 let audio;
@@ -237,7 +250,8 @@ $("say-test").addEventListener("click", async () => {
   if (!r.ok) alert("The phone is not connected.");
 });
 $("remove").addEventListener("click", async () => {
-  if (!confirm("Remove this phone from the dashboard? Its baseline and alerts are dropped.")) return;
+  const what = $("remove").textContent.replace("Remove ", "");
+  if (!confirm(`Remove ${what} from the dashboard? Its baseline and alerts are dropped.`)) return;
   await fetch(API, { method: "DELETE" });
   location.href = "/";
 });
@@ -253,7 +267,7 @@ function connect() {
   ws.onclose = (e) => {
     if (e.code === 4404) {
       banner.className = "banner offline";
-      bannerText.textContent = "This bed no longer exists (phone removed or server restarted).";
+      bannerText.textContent = "This bed no longer exists (removed or server restarted).";
       return;
     }
     banner.className = "banner offline";

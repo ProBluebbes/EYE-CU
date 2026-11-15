@@ -3,7 +3,7 @@
 Inputs are the signs StrokeWatch measures, each given as the patient's WEAK side (LEFT/RIGHT =
 the patient's side, as everywhere else):
   face  - new lower-face droop (detector)
-  arms / legs - one-sided drift or failure to lift (BE-FAST check)
+  arms  - one-sided drift or failure to lift (BE-FAST check)
   eyes  - gaze palsy or deviation (BE-FAST check). befast already stores the eye sign as the
           weak side a HEMISPHERIC lesion would give: eyes can't look left, or stay turned to
           the right -> weak side LEFT.
@@ -54,25 +54,18 @@ def localize(face: str | None = None, exam: dict | None = None) -> dict | None:
         return c.get("side") if c.get("status") == "abnormal" and c.get("side") in ("LEFT", "RIGHT") else None
 
     face = face if face in ("LEFT", "RIGHT") else None
-    arm, leg, eyes = sign("arms"), sign("legs"), sign("eyes")
+    limb, eyes = sign("arms"), sign("eyes")
     no_response = bool((exam or {}).get("no_response"))
-    limbs = {s for s in (arm, leg) if s}
     lw = lambda s: s.lower()
 
     def out(pattern, text, short, weak=None, hemi=None):
         return {"pattern": pattern, "weak_side": weak, "hemisphere": hemi, "short": short,
                 "text": text, "caveat": CAVEAT}
 
-    if not (face or limbs or eyes):
+    if not (face or limb or eyes):
         return None
-    if len(limbs) == 2:
-        return out("mixed", "Arm and leg weakness on different sides: the signs don't point to "
-                            "one side of the brain. This may be a brainstem stroke, or have "
-                            "another cause.", "signs on both sides")
-    limb = next(iter(limbs), None)
-    limb_word = " and ".join(w for w, s in (("arm", arm), ("leg", leg)) if s)
     if limb and face and face != limb:
-        return out("crossed", f"Facial droop on the {lw(face)} but {limb_word} weakness on the "
+        return out("crossed", f"Facial droop on the {lw(face)} but arm weakness on the "
                               f"{lw(limb)} (crossed signs): this may be a brainstem stroke.",
                    "may be a brainstem stroke")
     if eyes and limb and eyes != limb:
@@ -89,7 +82,7 @@ def localize(face: str | None = None, exam: dict | None = None) -> dict | None:
 
     weak = limb or face or eyes
     hemi = _other(weak)
-    seen = [w for w, s in (("facial droop", face), (f"{limb_word} weakness", limb),
+    seen = [w for w, s in (("facial droop", face), ("arm weakness", limb),
                            ("eye signs", eyes)) if s]
     seen_txt = seen[0] if len(seen) == 1 else ", ".join(seen[:-1]) + " and " + seen[-1]
     text = (f"{seen_txt[0].upper()}{seen_txt[1:]} on the patient's {lw(weak)} side: "
@@ -125,7 +118,6 @@ def _selftest():
     assert r["hemisphere"] == "LEFT" and "aphasia" in r["text"], r
     assert localize("LEFT", exam(arms="RIGHT"))["pattern"] == "crossed"
     assert localize(None, exam(eyes="RIGHT", arms="LEFT"))["pattern"] == "wrong_way_eyes"
-    assert localize(None, exam(arms="LEFT", legs="RIGHT"))["pattern"] == "mixed"
     assert localize(None, {"components": {"eyes": {"status": "inconclusive", "side": None}}}) is None
     for r in (localize(exam=exam(eyes="LEFT")), localize("RIGHT")):
         print(r["short"], "|", r["text"])

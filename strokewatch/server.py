@@ -14,16 +14,18 @@ Endpoints
   GET  /                          dashboard (grid + alert center)
   WS   /api/dashboard/ws          JSON state (all beds + alerts + tunnel) and binary thumbnails
   GET  /bed/<id>                  bed page
-  GET  /api/beds/<id>/video       MJPEG, full size
+  GET  /api/beds/<id>/video       MJPEG, full size, with landmarks; ?overlay=0 without
   WS   /api/beds/<id>/ws          JSON status for one bed; webcam beds also {"type": "say", ...}
                                   (spoken check prompts, played by the page)
   POST /api/beds/<id>/reset       rebuild baseline (closes any open alert as "reset")
   POST /api/beds/<id>/calibrate   same, as a guided calibration (look straight, turn and hold
                                   each side, straight again); prompts in the status
   POST /api/beds/<id>/say         {"text": ...} phone beds: speak through the phone
-  POST /api/beds/<id>/exam        start a voice-guided BE-FAST check (eyes, arms, legs)
+  POST /api/beds/<id>/exam        start a voice-guided BE-FAST check (eyes, arms)
+  POST /api/beds/<id>/exam?only=arms  hand test: arms out, palms up, 10 s (arm drift only)
   POST /api/beds/<id>/exam/cancel stop a running check
-  DELETE /api/beds/<id>           phone beds: remove
+  DELETE /api/beds/<id>           phone and demo beds: remove
+  GET  /api/demos                 demo videos in clips/demo/;  POST {"name": ...} adds one as a bed
   POST /api/alerts/<n>/ack        acknowledge (silences the alarm, bed stays in ALERT)
   POST /api/alerts/<n>/resolve    {"resolution": "false_alarm"|"confirmed"} + rebuild baseline
   GET  /phone                     phone camera page (Safari)
@@ -38,6 +40,7 @@ import asyncio
 import json
 import io
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import segno
 from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -47,13 +50,23 @@ from fastapi.staticfiles import StaticFiles
 from . import ROOT, apply_overrides, load_config, palsy
 from .access import AccessKeyMiddleware, new_key
 from .befast import ServerVoice, exam_cfg
-from .beds import BedManager, CameraBed, PhoneBed, SimBed, bed_cfg
+from .beds import BedManager, CameraBed, DemoBed, PhoneBed, SimBed, bed_cfg
 from .mock import single_scenario, ward_scenarios
 from .tunnel import Tunnel
 
 WEB = ROOT / "web"
+DEMO_DIR = ROOT / "clips" / "demo"  # demo videos offered by the dashboard's "Add demo" button
+DEMO_EXTS = {".mp4", ".mov", ".m4v"}
 PHONE_DEFAULTS = {"send_fps": 10, "max_side": 640, "jpeg_quality": 0.7}
 MAX_FRAME_BYTES = 2_000_000
+
+
+def demo_clips() -> dict[str, Path]:
+    """Display name (file name without extension) -> path, sorted by name."""
+    if not DEMO_DIR.is_dir():
+        return {}
+    files = sorted(p for p in DEMO_DIR.iterdir() if p.suffix.lower() in DEMO_EXTS)
+    return {p.stem: p for p in files}
 
 
 def phone_cfg(cfg: dict) -> dict:
@@ -172,14 +185,16 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
 
 
     @app.get("/api/beds/{bed_id}/video")
-    async def video(bed_id: str):
+    async def video(bed_id: str, overlay: int = 1):
+        """overlay=1 (default): landmark lines and dots drawn on the face; overlay=0: plain image."""
         bed = get_bed(bed_id)
+        marked = bool(overlay)
 
         async def gen():
             last = -1
             while not stopping() and manager.beds.get(bed_id) is bed:
-                bed.want_full_frames()
-                fid, jpeg, _ = bed.latest()
+                bed.want_full_frames(marked)
+                fid, jpeg, _ = bed.latest(marked)
                 if jpeg is not None and fid != last:
                     last = fid
                     yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
@@ -238,9 +253,11 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
         return {"ok": True}
 
     @app.post("/api/beds/{bed_id}/exam")
-    def start_exam(bed_id: str):
+    def start_exam(bed_id: str, only: str | None = None):
         get_bed(bed_id)
-        return {"ok": manager.request_exam(bed_id)}
+        if only not in (None, "arms"):
+            raise HTTPException(400, "only may be 'arms' (hand test)")
+        return {"ok": manager.request_exam(bed_id, only)}
 
     @app.post("/api/beds/{bed_id}/exam/cancel")
     def cancel_exam(bed_id: str):
@@ -250,9 +267,9 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
     @app.delete("/api/beds/{bed_id}")
     async def remove_bed(bed_id: str):
         bed = get_bed(bed_id)
-        if not isinstance(bed, PhoneBed):
-            raise HTTPException(400, "only phone beds can be removed while running")
-        sock = bed.sock
+        if not isinstance(bed, (PhoneBed, DemoBed)):
+            raise HTTPException(400, "only phone and demo beds can be removed while running")
+        sock = getattr(bed, "sock", None)
         if sock is not None:
             try:
                 await sock.close(code=4004)  # phone page: "removed from the dashboard"
@@ -260,6 +277,25 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
                 pass
         await asyncio.to_thread(manager.remove, bed_id)
         return {"ok": True}
+
+    # ------------------------------------------------------------ demo videos
+    @app.get("/api/demos")
+    def list_demos():
+        return {"demos": list(demo_clips()), "folder": str(DEMO_DIR.relative_to(ROOT))}
+
+    @app.post("/api/demos")
+    async def add_demo(name: str = Body(..., embed=True)):
+        """Add a bed that plays clips/demo/<name> in a loop (only names from the list)."""
+        path = demo_clips().get(name)
+        if path is None:
+            raise HTTPException(404, f"no demo video {name!r}")
+        bed_id, bed_name = manager.allocate()
+        try:
+            bed = await asyncio.to_thread(DemoBed, bed_id, bed_name, manager.cfg, str(path), name)
+        except RuntimeError as e:
+            raise HTTPException(500, str(e)) from e
+        manager.add(bed)
+        return {"ok": True, "bed_id": bed_id, "bed_name": bed_name}
 
     # ------------------------------------------------------------ alerts
     @app.post("/api/alerts/{alert_id}/ack")

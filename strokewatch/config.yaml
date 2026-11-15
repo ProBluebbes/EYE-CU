@@ -51,7 +51,7 @@ vision:
   jaw_open_max: 0.35
   # eyeBlink blendshape above this = blinking -> eye feature (and gaze) skipped for that frame.
   blink_max: 0.45
-  # MediaPipe Pose model, only run during the BE-FAST check's arm/leg steps. Joints with
+  # MediaPipe Pose model, only run during the BE-FAST check's arm step. Joints with
   # visibility below pose_min_visibility count as "not in view".
   pose_model_path: models/pose_landmarker_lite.task
   pose_min_visibility: 0.5
@@ -126,14 +126,18 @@ detector:
   # Cap on time credited between two frames (so pauses/dropped frames don't count).
   max_dt: 0.25
 
-# Combined droop detection (default; strokewatch/palsy.py): StrokeWatch's score / threshold + a learned palsy
-# model's logit relative to the patient's first baseline_s seconds; ALERT at >= line for detector.alert_seconds.
-# Benchmarked on 6 clips with synthetic droops (scripts/droop_eval.py): 18/36 droops caught, 0/6 false alerts
-# (StrokeWatch alone: 6/36). Missing model folder or server --no-palsy: StrokeWatch's detector alone, as before.
+# Combined droop detection (default; strokewatch/palsy.py): StrokeWatch's score / threshold + model_weight x a
+# learned palsy model's logit relative to the patient's first baseline_s seconds; ALERT at >= line for
+# detector.alert_seconds. Missing model folder or server --no-palsy: StrokeWatch's detector alone, as before.
 palsy:
   enabled: true
   model_dir: runs/cv_landmark_geom_cnn_20261114-212730   # palsynet 3D-CNN (face-surface CNN), 5 folds averaged
-  line: 1.74          # chosen on held-out clips at <= 1% flagged no-droop moments
+  # The model counts for much less than StrokeWatch's own score (Nov 14 2026). At weight 1 / line 1.74 (picked on
+  # held-out benchmark clips at <= 1% flagged no-droop moments; 18/36 synthetic droops vs 6/36 for StrokeWatch
+  # alone, but those droops were >= ~5 mm) it alerted later than StrokeWatch alone on 2-3 mm droops. The line
+  # scales with the weight between StrokeWatch alone (weight 0, line 1.0) and that tuned point: 1 + 0.74 x weight.
+  model_weight: 0.25
+  line: 1.19
   baseline_s: 20      # the model's personal baseline: its scores over the first 20 s
   avg_windows: 4      # p averaged over the last 4 model updates (~2 s)
   hop_s: 0.5          # one model update every 0.5 s, on the last 2 s of landmarks
@@ -149,21 +153,28 @@ palsy:
 gaze:
   baseline_samples: 150   # gaze samples (head facing camera) for the patient's own centre
   center_max: 0.06        # the centre is clipped to this, so an old deviation isn't fully absorbed
-  window_s: 30            # deviation must hold this long ... (20 s: ~2.6 false/h on sim)
+  # False triggers (Nov 14 2026): 30 s fired on a healthy person just looking to one side for
+  # a while. Sim of someone looking around (holds a side, median 15 s, glances back ~every
+  # 15 s) / a TV off to one side: 30 s = 6.1 / 9.1 checks per hour; 60 s + glance-back reset +
+  # exam.normal_pause_s = 0.9 / 1.9; a true deviation is then caught after ~54 s (was 27 s).
+  window_s: 60            # deviation must hold this long ...
   deviation: 0.08         # ... with |median - centre| at least this (~half of full sideways) ...
   agree_fraction: 0.9     # ... and this share of samples on that side (fixed, not glancing)
   max_yaw_deg: 30          # use gaze samples up to this head turn (= vision.gaze_max_yaw_deg)
   max_gap_s: 10           # no gaze samples this long -> the window starts over
+  cross: 0.03             # eyes this far past centre to the OTHER side for cross_s = glanced
+  cross_s: 0.4            # back: window starts over (a fixed deviation can't cross the midline)
 
 # Voice-guided BE-FAST check (befast.ExamRunner, ~40 s): look straight/left/right, close eyes
-# + both arms out 10 s, lift both legs 5 s (only if legs are in view). Starts on a facial-droop
-# ALERT or a gaze deviation (auto), or from the bed page. The face detector pauses meanwhile.
-# Limb heights are in shoulder widths (wrist above shoulder; arms straight out ~ 0).
+# + both arms out 10 s. Starts on a held gaze deviation (auto; not on a bed already in
+# facial-droop ALERT: the droop alert stands on its own), or from the bed page. The face
+# detector pauses meanwhile.
+# Arm heights are in shoulder widths (wrist above shoulder; arms straight out ~ 0).
 # PROVISIONAL thresholds (synthetic data only).
 exam:
   auto: true
-  cooldown_s: 300           # min gap between automatic checks for gaze deviation
-  legs: true
+  cooldown_s: 300           # min gap between automatic checks for gaze deviation ...
+  normal_pause_s: 1800      # ... and after a check found full eye movement both ways
   server_voice: false       # webcam beds: the bed page speaks; true = also the server's speaker
                             # (afplay/`say`; silent when the server runs in a detached tmux)
   alert_on_no_response: true  # no response to any instruction -> alert
@@ -186,13 +197,13 @@ exam:
   arm_raise_gain: 0.4       # wrist this much higher than at rest (while hearing the prompt) = raised
   arm_up_min: -0.9          # if the resting height wasn't seen: wrist at least this high (vs shoulder);
                             # live: raised -0.4..+1.0 depending on camera angle, lowered -1.3..-1.6
+  arm_up_already: -0.4      # at rest at least this high = arm already up while hearing the prompt
+                            # (raised early): counts as raised if it stays up. Live Nov 14 2026:
+                            # rest 1.5 = start 1.5 read as "did not raise the arms" without this
   raise_asym: 0.4           # "one limb not raised" also needs this height difference
   arm_drift: 0.20           # drop over the hold ...
   arm_drift_asym: 0.15      # ... and this much more than the other arm = drift
   arm_fell: -0.9            # ends below this while the other arm stays up = fell
-  leg_raise_gain: 0.20      # height gain over rest = leg raised
-  leg_drift: 0.20
-  leg_drift_asym: 0.15
 
 server:
   host: 127.0.0.1

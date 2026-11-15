@@ -2,8 +2,9 @@
 
 Webcam monitor that alerts on a NEW one-sided facial droop, relative to the patient's own
 automatically built baseline, plus more of BE-FAST: it watches for **eyes held to one side**
-and, on a droop or a fixed gaze, runs a **voice-guided check** (look left/right, eyes closed
-with both arms out, lift both legs) that measures **gaze palsy and arm/leg drift**.
+and, on a fixed gaze, runs a **voice-guided check** (look left/right, eyes closed
+with both arms out) that measures **gaze palsy and arm drift**. A droop alerts on its own;
+no check follows it automatically.
 Hackathon demo, not a medical device.
 
 ## Setup (macOS, Python 3.12, since MediaPipe has no 3.14 wheels)
@@ -41,11 +42,14 @@ For phone cameras: `brew install cloudflared`.
 
 Droop alerts combine StrokeWatch's baseline-change score with a learned facial-palsy model (palsynet 3D-CNN,
 see `README_palsynet.md`) measured against the patient's own first 20 s:
-`combined = StrokeWatch score / threshold (0 while building its baseline) + model logit − its first-20-s median`,
-ALERT at ≥ 1.74 for 6 s. StrokeWatch skips frames while the head moves or tilts and may take long to build its
+`combined = StrokeWatch score / threshold (0 while building its baseline) + 0.25 × (model logit − its first-20-s median)`,
+ALERT at ≥ 1.19 for 6 s. The model counts for much less than StrokeWatch's own score (`palsy.model_weight`;
+the line scales with it as 1 + 0.74 × weight, from StrokeWatch alone at weight 0 / line 1.0 to the
+benchmark-tuned weight 1 / line 1.74). StrokeWatch skips frames while the head moves or tilts and may take long to build its
 baseline; the model keeps scoring then, and the personal baseline stops it reacting to someone's normal face.
-On six clips with a synthetic one-sided mouth droop (`scripts/droop_benchmark.py`, `scripts/droop_eval.py`) it
-caught 18/36 droops with 0/6 false alerts; StrokeWatch alone caught 6/36 (only on the still clip). The dashboard
+At weight 1, on six clips with a synthetic one-sided mouth droop (`scripts/droop_benchmark.py`,
+`scripts/droop_eval.py`), it caught 18/36 droops with 0/6 false alerts; StrokeWatch alone caught 6/36 (only on
+the still clip). The current weight 0.25 has not been benchmarked. The dashboard
 and bed page show the combined score against its line; StrokeWatch's own score is kept in the status as
 `sw_score`. Settings: `palsy:` in `config.yaml`. `--no-palsy` (or a missing model folder) = StrokeWatch alone;
 `--palsy-model RUN_DIR` picks another model. Needs `torch` (this repo's `uv` environment).
@@ -86,9 +90,16 @@ dropouts at 60–90 s, new right droop + eyes to the left + weak right arm at 20
 right + weak left arm at 110 s with a normal face (only the gaze watch catches it), restless
 and won't follow the eye steps (keeps staring at one spot, so the eyes part comes out
 INCONCLUSIVE) (cycles beyond 8 beds). They follow the BE-FAST check's instructions (except
-that last one), so you can watch a full check without a camera (or press **Run BE-FAST
-check** on any SIM bed page).
+that last one), so you can watch a full check without a camera: press **Run BE-FAST
+check** on any SIM bed page (a droop bed's weak arm only shows up that way, since a droop
+alert doesn't start a check).
 Everything is in memory: a restart starts fresh.
+
+**Add demo** on the dashboard picks a video from `clips/demo/` (dropdown) and adds it as a new
+bed (DEMO badge) that plays in a loop like a camera. The bundled demos (made with
+`scripts/demo_droop.py`) show a normal face for 30 s, then a slow left or right droop that
+alerts at about 65 s. Drop any other `.mp4`/`.mov` in that folder to offer it too. Remove a
+demo bed from its bed page.
 
 Each module runs on its own:
 
@@ -98,19 +109,25 @@ Each module runs on its own:
 .venv/bin/python -m strokewatch.replay clips/*.mp4                   # → clips/X.png + X.csv
 .venv/bin/python -m strokewatch.detector                             # synthetic self-test
 python scripts/synth_clip.py face.jpg clips/synth.mp4 [--pre-droop 12] # fake droop from a photo
+python scripts/demo_droop.py clips/still.mov clips/demo.mp4 [--side right] [--droop-mm 5] [--label]
+                                       # demo video: real clip, normal 30 s, then a slow droop over 60 s
+                                       # (clips shorter than ~110 s play forward/backward to fill it)
 ```
 
 Any config value can be overridden: `--set detector.threshold=3.5 --set vision.lip_gap_max=0.08`.
 
-### BE-FAST check (eyes, arms, legs)
+### BE-FAST check (eyes, arms)
 
 - **Passive gaze watch.** Every frame, the horizontal eye position is measured from the iris
   landmarks the face model already returns (iris offset from the middle of the eye opening,
   per eye width, both eyes averaged), relative to the patient's own centre learned at start.
-  Eyes held to one side for 30 s ("gaze held to the right") start a check. In a hemispheric
+  Eyes held to one side for 60 s without glancing back past the centre ("gaze held to the
+  right") start a check; any glance back starts the count over. In a hemispheric
   stroke the eyes deviate toward the lesion, i.e. away from the weak side.
-- **Voice-guided check (~40 s)** starts automatically on a facial-droop ALERT or a held gaze
-  (max one gaze-triggered check per 5 min), or with **Run BE-FAST check** on the bed page:
+- **Voice-guided check (~40 s)** starts automatically on a held gaze (max one per 5 min,
+  per 30 min after a check found normal eye movement; never on a bed already in facial-droop
+  ALERT, since the droop is the stroke sign and its alert stands alone), or with **Run
+  BE-FAST check** on the bed page:
   1. "Keep your head still, and look straight at the camera." / "look to your left" /
      "Now look to your right." Can't look fully to one side (gaze palsy), or eyes stay turned
      when asked to look ahead → abnormal. **Only if the patient followed the steps:** eyes
@@ -124,11 +141,14 @@ Any config value can be overridden: `--set detector.threshold=3.5 --set vision.l
   2. "Close your eyes. Hold both arms straight out in front of you, palms up…" (10 s, MediaPipe
      Pose). One arm not raised, or sinking clearly more than the other (pronator-drift style)
      → abnormal. Shown in shoulder widths; the "eyes stayed open" note checks the instruction.
-  3. "Now lift both legs up, and hold them there." (5 s) Same idea with ankles/knees. Skipped
-     automatically (nothing is said) when hips and knees weren't in view during the arm step.
-  4. No response to any instruction (eyes and arms both not followed) → "Did not follow the
+     Arms already up while the instruction plays count as raised. Neither arm raised, or
+     both lowered before the 10 s are up → inconclusive (instructions not followed).
+  3. No response to any instruction (eyes and arms both not followed) → "Did not follow the
      check's instructions" (possible confusion/aphasia), which also alerts. One part alone
      not followed (e.g. a face-only camera and an inconclusive eyes part) doesn't alert.
+- **Hand test** on the bed page runs only the arm step (~25 s: intro, arms out 10 s, lower).
+  It needs the pose model (`models/pose_landmarker_lite.task`, see setup); without it the
+  bed page says so instead of running.
 - **Where the voice comes out:** phone beds speak through the phone and show the instruction
   in large text (with ←/→ arrows for the patient's own left/right). Webcam beds speak through
   this computer (macOS `say`; set `exam.server_voice: false` if the camera isn't next to the
@@ -163,10 +183,11 @@ simulated patients and photos only), so see the tuning notes below.
    you get the red banner, "possible new LEFT/RIGHT droop", with the onset time.
 4. Reset while already drooping. The droop is absorbed into the baseline; only making it
    worse alerts.
-5. After the droop alert the voice check starts by itself. Follow it, but let one arm sink
-   during the 10 s hold: that arm's drift is added to the alert.
+5. The droop alert stands on its own (no check follows). To show arm drift, press **Run
+   BE-FAST check** on the bed page, follow it, but let one arm sink during the 10 s hold:
+   that arm's drift is added to the alert.
 6. Or, after the baseline, keep your eyes on something far to one side (head still) for
-   about 30 s: the check starts from the gaze watch alone.
+   about 60 s without glancing back: the check starts from the gaze watch alone.
 
 ## How it works
 
@@ -177,7 +198,7 @@ simulated patients and photos only), so see the tuning notes below.
   Features (+ = patient's LEFT lower): mouth-corner height difference, log eye-opening
   ratio, brow-height difference; plus horizontal gaze from the iris landmarks (for befast.py,
   measured up to a 30° head turn and also while talking). Also `PoseAnalyzer` (MediaPipe
-  Pose, arm/leg heights; only run during a check). Then subtracts the fake asymmetry that
+  Pose, arm heights; only run during a check). Then subtracts the fake asymmetry that
   turning the head causes (`vision.yaw_bias`, a per-feature curve over yaw fitted on
   recorded head-turn clips). Skips frames while the head moves faster than 30°/s (landmarks lag), with the
   head turned > 40°, sideways tilt > 40°, nodded > 20°, talking
@@ -257,5 +278,4 @@ reports noise, angle bias and what the detector does).
   normal. Raised arms read -0.4..+1.0 and lowered ones -1.3..-1.6 depending on camera angle,
   hence `exam.arm_up_min: -0.9` when the resting height isn't seen. Not yet seen live: a
   steady hold with eyes closed on both arms, or anyone but one person.
-  Shoulders and hands in view, camera at chest-to-face height works best. Legs are only
-  checked if hips and knees are in view (never tested live).
+  Shoulders and hands in view, camera at chest-to-face height works best.

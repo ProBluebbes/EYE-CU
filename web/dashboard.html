@@ -11,6 +11,7 @@
     <div class="brand">StrokeWatch <span class="muted">ward overview</span></div>
     <div id="counts" class="counts"></div>
     <button id="add-phone" class="addphone">Add phone</button>
+    <button id="add-demo" class="addphone demo">Add demo</button>
     <button id="sound" class="sound off" title="Browsers only allow sound after a click">Enable alarm sound</button>
     <div id="clock" class="clock"></div>
   </header>
@@ -29,6 +30,20 @@
       <button id="modal-close" class="modal-close" aria-label="Close">×</button>
       <h2>Add a phone camera</h2>
       <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="demo-modal" class="modal" hidden>
+    <div class="modal-box small">
+      <button id="demo-close" class="modal-close" aria-label="Close">×</button>
+      <h2>Add a demo patient</h2>
+      <p class="muted">Plays a recorded video as a new bed, in a loop. The face is normal for 30 s
+        (baseline), then droops slowly; it alerts at about 65 s.</p>
+      <div class="demo-row">
+        <select id="demo-select"></select>
+        <button id="demo-add" class="addphone">Add to dashboard</button>
+      </div>
+      <p id="demo-msg" class="muted"></p>
     </div>
   </div>
 

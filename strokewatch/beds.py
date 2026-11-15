@@ -57,14 +57,15 @@ class Bed(threading.Thread):
         self.gaze = GazeMonitor(cfg)
         self.exam: ExamRunner | None = None
         self.last_exam: dict | None = None
-        self._exam_req: tuple[str, str] | None = None  # ("start", trigger) | ("cancel", why)
+        # ("start", trigger, only) | ("cancel", why, None); only="arms" = hand test
+        self._exam_req: tuple[str, str, str | None] | None = None
         self._next_auto_exam = 0.0     # frame time; gaze-triggered checks wait for this
-        self._alert_exam_done = False  # one automatic check per facial-droop ALERT
         self._pose: PoseAnalyzer | None = None
         self._pose_error: str | None = None
         self.lock = threading.Lock()
         self.frame_id = 0
-        self.jpeg: bytes | None = None
+        self.jpeg: bytes | None = None        # full size, with landmarks (bed page default)
+        self.jpeg_clean: bytes | None = None  # full size, no landmarks (bed page toggle)
         self.thumb_id = 0
         self.thumb: bytes | None = None
         self.status: dict | None = None
@@ -74,6 +75,7 @@ class Bed(threading.Thread):
         self._last_loop = None
         self._next_thumb = 0.0
         self._full_wanted_until = 0.0
+        self._clean_wanted_until = 0.0
         self._reset = threading.Event()
         self._calibrate = False
         self._stop_evt = threading.Event()
@@ -94,20 +96,25 @@ class Bed(threading.Thread):
         else:
             self.close()
 
-    def request_exam(self, trigger: str = "requested by staff"):
-        """Start a BE-FAST check on the next frame (any thread)."""
-        self._exam_req = ("start", trigger)
+    def request_exam(self, trigger: str = "requested by staff", only: str | None = None):
+        """Start a BE-FAST check on the next frame (any thread). only="arms": hand test."""
+        self._exam_req = ("start", trigger, only)
 
     def cancel_exam(self, why: str = "cancelled by staff"):
-        self._exam_req = ("cancel", why)
+        self._exam_req = ("cancel", why, None)
 
-    def want_full_frames(self):
-        """Called by bed-page video streams; full-size JPEGs are only encoded while wanted."""
-        self._full_wanted_until = time.monotonic() + FULL_FRAME_IDLE_S
+    def want_full_frames(self, overlay: bool = True):
+        """Called by bed-page video streams; full-size JPEGs are only encoded while wanted,
+        with landmarks (overlay) and/or without, whichever a viewer is watching."""
+        until = time.monotonic() + FULL_FRAME_IDLE_S
+        if overlay:
+            self._full_wanted_until = until
+        else:
+            self._clean_wanted_until = until
 
-    def latest(self) -> tuple[int, bytes | None, dict | None]:
+    def latest(self, overlay: bool = True) -> tuple[int, bytes | None, dict | None]:
         with self.lock:
-            return self.frame_id, self.jpeg, self.status
+            return self.frame_id, self.jpeg if overlay else self.jpeg_clean, self.status
 
     def latest_thumb(self) -> tuple[int, bytes | None]:
         with self.lock:
@@ -125,11 +132,11 @@ class Bed(threading.Thread):
 
     def pose_features(self, frame: np.ndarray, t: float
                       ) -> tuple[PoseFeatures | None, np.ndarray | None]:
-        """Arm/leg heights for the BE-FAST check. The pose model is loaded on first use."""
+        """Arm heights for the BE-FAST check. The pose model is loaded on first use."""
         if self._pose is None and self._pose_error is None:
             try:
                 self._pose = PoseAnalyzer(self.cfg)
-            except Exception as e:  # missing model file etc.: check runs without arms/legs
+            except Exception as e:  # missing model file etc.: check runs without the arms
                 self._pose_error = str(e)
                 print(f"{self.bed_name}: pose analysis unavailable: {e}")
         if self._pose is None:
@@ -137,8 +144,10 @@ class Bed(threading.Thread):
         return self._pose.process(frame, t)
 
     def pose_problem(self) -> str | None:
-        """Why arms/legs can't be checked (None = fine). Loads the model if needed."""
-        if self._pose is None and self._pose_error is None:
+        """Why the arms can't be checked (None = fine). Loads the model if needed; called at
+        the start of each check, so a failed load is retried (e.g. model downloaded since)."""
+        if self._pose is None:
+            self._pose_error = None
             self.pose_features(np.zeros((64, 64, 3), np.uint8), 0.0)
         return self._pose_error
 
@@ -150,10 +159,18 @@ class Bed(threading.Thread):
             except Exception as e:  # speech is best-effort; never kill the bed thread
                 print(f"{self.bed_name}: could not speak: {e}")
 
-    def _start_exam(self, trigger: str, t: float):
+    def _start_exam(self, trigger: str, t: float, only: str | None = None):
+        pose_error = self.pose_problem()
+        what = "hand test" if only == "arms" else "BE-FAST check"
+        if only == "arms" and pose_error:  # nothing to measure: say why instead of an empty check
+            self.last_exam = {"cancelled": f"arm tracking unavailable: {pose_error}",
+                              "trigger": trigger, "only": only, "started_at": t,
+                              "finished_at": t, "summary": f"Hand test could not run: {pose_error}"}
+            print(f"{self.bed_name}: {what} could not run: {pose_error}")
+            return
         self.exam = ExamRunner(self.cfg, trigger, gaze_center=self.gaze.center,
-                               pose_error=self.pose_problem())
-        print(f"{self.bed_name}: BE-FAST check started ({trigger})")
+                               pose_error=pose_error, only=only)
+        print(f"{self.bed_name}: {what} started ({trigger})")
 
     def _exam_tick(self, frame: np.ndarray, ff: FrameFeatures, det_state: str):
         """Handle staff requests and automatic triggers, then advance a running check.
@@ -163,14 +180,13 @@ class Bed(threading.Thread):
             self.exam.cancel(req[1])
             self._say(STOPPED, None)
         elif req and req[0] == "start" and self.exam is None:
-            self._start_exam(req[1], ff.t)
-        if self.exam is None and self.ec["auto"]:
-            if det_state == "ALERT" and not self._alert_exam_done:
-                self._alert_exam_done = True
-                self._start_exam(f"facial droop ({self.detector.side})", ff.t)
-            elif (self.gaze.deviation and det_state != "baselining"
-                  and ff.t >= self._next_auto_exam):
-                self._start_exam(f"gaze held to the {self.gaze.deviation.lower()}", ff.t)
+            self._start_exam(req[1], ff.t, req[2])
+        # A facial droop is itself the stroke sign: its ALERT stands alone, no automatic check
+        # follows it (staff can still run one from the bed page). Only a held gaze, on a bed
+        # not already in droop ALERT, starts one automatically.
+        if (self.exam is None and self.ec["auto"] and det_state not in ("baselining", "ALERT")
+                and self.gaze.deviation and ff.t >= self._next_auto_exam):
+            self._start_exam(f"gaze held to the {self.gaze.deviation.lower()}", ff.t)
         ex, ppx = self.exam, None
         if ex is None:
             return None
@@ -181,15 +197,19 @@ class Bed(threading.Thread):
             self._say(text, ex.step.key if ex.step and not ex.finished else "done")
         if ex.finished:
             self.exam = None
-            self._next_auto_exam = ff.t + self.ec["cooldown_s"]
+            eyes = ((ex.result or {}).get("components") or {}).get("eyes") or {}
+            # eyes just moved fully both ways: looking to one side for a while after that is a
+            # preference (TV, window, visitor), not a new sign -> longer pause for gaze triggers
+            pause = self.ec["normal_pause_s" if eyes.get("status") == "normal" else "cooldown_s"]
+            self._next_auto_exam = ff.t + pause
             self.gaze.clear_window()
             if ex.result is not None:
                 self.last_exam = ex.result
-                print(f"{self.bed_name}: BE-FAST check done: {ex.result['summary']}")
+                print(f"{self.bed_name}: {'hand test' if ex.only == 'arms' else 'BE-FAST check'} done: {ex.result['summary']}")
                 if self.on_exam_done:
                     self.on_exam_done(self, ex.result)
             else:
-                self.last_exam = {"cancelled": ex.cancelled, "trigger": ex.trigger,
+                self.last_exam = {"cancelled": ex.cancelled, "trigger": ex.trigger, "only": ex.only,
                                   "started_at": ex.started_at, "finished_at": ff.t,
                                   "summary": f"Check stopped: {ex.cancelled}"}
         return ppx
@@ -235,7 +255,6 @@ class Bed(threading.Thread):
             if self.exam:
                 self.exam.cancel("bed reset")
                 self.exam = None
-            self._alert_exam_done = False
             self._next_auto_exam = 0.0
         prev_state = self.detector.state
         ppx = self._exam_tick(frame, ff, prev_state)
@@ -259,8 +278,7 @@ class Bed(threading.Thread):
         st["exam"] = self.exam.status() if self.exam else {"active": False}
         st["last_exam"] = self.last_exam
 
-        draw_landmarks(frame, px, ff)
-        draw_pose(frame, ppx)
+        # Dashboard thumbnail: the plain camera image (no landmark lines or dots).
         thumb = None
         if now >= self._next_thumb:
             self._next_thumb = now + 1.0 / self.bc["thumb_fps"]
@@ -268,8 +286,16 @@ class Bed(threading.Thread):
             tw = self.bc["thumb_width"]
             small = cv2.resize(frame, (tw, int(h * tw / w)), interpolation=cv2.INTER_AREA)
             thumb = cv2.imencode(".jpg", small, self._thumb_q)[1].tobytes()
-        jpeg = None
-        if now < self._full_wanted_until:
+        # Bed page: with landmarks by default; without while a viewer has them toggled off.
+        want_marked, want_clean = now < self._full_wanted_until, now < self._clean_wanted_until
+        jpeg = jpeg_clean = None
+        if want_clean:
+            clean = frame.copy() if want_marked else frame
+            draw_readout(clean, ff)
+            jpeg_clean = cv2.imencode(".jpg", clean, self._jpeg_q)[1].tobytes()
+        if want_marked:
+            draw_landmarks(frame, px, ff)
+            draw_pose(frame, ppx)
             draw_readout(frame, ff)
             jpeg = cv2.imencode(".jpg", frame, self._jpeg_q)[1].tobytes()
 
@@ -279,6 +305,8 @@ class Bed(threading.Thread):
             self.last_frame_wall = time.time()
             if jpeg is not None:
                 self.jpeg = jpeg
+            if jpeg_clean is not None:
+                self.jpeg_clean = jpeg_clean
             if thumb is not None:
                 self.thumb_id += 1
                 self.thumb = thumb
@@ -326,6 +354,15 @@ class CameraBed(Bed):
         self.src.release()
         self.analyzer.close()
         super().close()
+
+
+class DemoBed(CameraBed):
+    """A demo video (clips/demo/) added from the dashboard; plays in a loop like a camera."""
+    kind = "demo"
+
+    def __init__(self, bed_id: str, name: str, cfg: dict, source: str, clip: str):
+        super().__init__(bed_id, name, cfg, source)
+        self.clip = clip
 
 
 class PhoneBed(Bed):
@@ -554,11 +591,12 @@ class BedManager:
             del self.alerts[MAX_ALERTS:]
         print(f"ALERT {bed.bed_name}: BE-FAST check: {res['summary']}")
 
-    def request_exam(self, bed_id: str) -> bool:
+    def request_exam(self, bed_id: str, only: str | None = None) -> bool:
         bed = self.beds.get(bed_id)
         if bed is None:
             return False
-        bed.request_exam()
+        bed.request_exam("hand test requested by staff" if only == "arms"
+                         else "requested by staff", only)
         return True
 
     def cancel_exam(self, bed_id: str) -> bool:
@@ -626,6 +664,8 @@ class BedManager:
                    last_frame_age=round(now - last, 1) if last else None)
         if isinstance(bed, PhoneBed):
             out["phone_connected"] = bed.sock is not None
+        if isinstance(bed, DemoBed):
+            out["demo_clip"] = bed.clip
         if st is not None and now - last > self.bc["offline_after_s"]:
             out["state"] = "offline"
         elif st is None and now - bed.created_wall > 10:  # never produced a frame

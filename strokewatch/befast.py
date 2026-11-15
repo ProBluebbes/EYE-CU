@@ -1,4 +1,4 @@
-"""BE-FAST extras on top of the facial-droop monitor: Eyes (gaze) and Arms/legs (drift).
+"""BE-FAST extras on top of the facial-droop monitor: Eyes (gaze) and Arms (drift).
 
 GazeMonitor (passive, every frame): horizontal eye position from the iris landmarks the face
 model already gives (vision.horizontal_gaze), relative to the patient's own baseline. Eyes held
@@ -6,12 +6,11 @@ to one side for `gaze.window_s` with little movement = "gaze deviation" (in a he
 stroke the eyes deviate TOWARD the lesion, i.e. away from the weak side).
 
 ExamRunner (active, ~40 s): a voice-guided bedside check. It starts automatically when the
-face detector raises a facial-droop ALERT or the GazeMonitor flags a deviation (or when staff
-press "Run BE-FAST check"). It speaks short instructions (the phone for phone beds, the bed
+GazeMonitor flags a deviation on a bed not already in facial-droop ALERT (a droop alert stands
+on its own), or when staff press "Run BE-FAST check". It speaks short instructions (the phone for phone beds, the bed
 page in the browser for webcam beds; recorded clips from voice.py) and measures the responses:
   look straight / left / right            -> gaze palsy (can't look to one side) or fixed deviation
   close eyes, both arms out, palms up, 10 s -> arm drift (pronator-drift style, MediaPipe Pose)
-  lift both legs, 5 s                     -> leg drift (only if hips + knees are in view)
 The face detector is paused during the check (deliberate eye/arm movements aren't droop).
 Results go to the bed's alert (or raise one): see beds.BedManager._exam_done.
 
@@ -36,16 +35,20 @@ from .vision import FrameFeatures, PoseFeatures
 GAZE_DEFAULTS = {
     "baseline_samples": 150,  # gaze samples (head facing camera) for the patient's centre
     "center_max": 0.06,       # the baseline centre is clipped to this (an old deviation isn't fully absorbed)
-    "window_s": 30,           # deviation must hold this long (20 s at 0.08: ~2.6 false/h on sim)
+    "window_s": 60,           # deviation must hold this long (30 s: frequent false checks
+                              # from just looking to one side, see config.yaml)
     "deviation": 0.08,        # |median gaze - centre| above this = deviated (~half of full sideways)
     "agree_fraction": 0.9,    # share of window samples on that side (= fixed, not glancing)
     "max_yaw_deg": 30,        # head turn up to which gaze samples count (see vision.gaze_max_yaw_deg)
     "max_gap_s": 10,          # no gaze samples for this long -> window restarts
+    "cross": 0.03,            # eyes this far past centre to the OTHER side ...
+    "cross_s": 0.4,           # ... for this long = glanced back: window restarts (a fixed
+                              # deviation can't cross the midline; a healthy look-aside does)
 }
 EXAM_DEFAULTS = {
-    "auto": True,             # start automatically on facial-droop ALERT / gaze deviation
+    "auto": True,             # start automatically on a gaze deviation (never after a droop ALERT)
     "cooldown_s": 300,        # min seconds between automatic checks for gaze deviation
-    "legs": True,             # include the leg step (skipped anyway if legs aren't in view)
+    "normal_pause_s": 1800,   # ... and after a check found full eye movement both ways
     "server_voice": False,    # webcam beds: the bed page speaks; True = also the server's speaker
     "alert_on_no_response": True,
     "max_gap_s": 5,           # no camera frames for this long -> check cancelled
@@ -61,13 +64,13 @@ EXAM_DEFAULTS = {
     "arm_raise_gain": 0.4,        # wrist this much higher (shoulder widths) than at rest = raised
     "arm_up_min": -0.9,           # if the resting height wasn't seen: wrist at least this high
                                   # (live: raised -0.4..+1.0 by camera angle, lowered -1.3..-1.6)
+    "arm_up_already": -0.4,       # "rest" (while hearing the prompt) at least this high = the arm
+                                  # was already up (raised early / knew the test): counts as
+                                  # raised if it stays this high (live Nov 14: rest 1.5 = start)
     "raise_asym": 0.4,            # "one limb not raised" needs this height difference too
     "arm_drift": 0.20,            # drop over the hold (shoulder widths) ...
     "arm_drift_asym": 0.15,       # ... and this much more than the other arm
     "arm_fell": -0.9,             # ends below this while the other arm is still up = fell
-    "leg_raise_gain": 0.20,       # leg height gain over rest counted as "leg raised"
-    "leg_drift": 0.20,
-    "leg_drift_asym": 0.15,
 }
 
 
@@ -100,6 +103,8 @@ class GazeMonitor:
         self.value: float | None = None       # rolling median, relative to centre
         self.deviation: str | None = None     # "LEFT" | "RIGHT" | None
         self.since: float | None = None       # when the current deviation was first seen
+        self._cross_since: float | None = None
+
 
     def update(self, ff: FrameFeatures):
         g, gc = ff.gaze_h, self.gc
@@ -112,10 +117,18 @@ class GazeMonitor:
                 self.center = float(np.clip(c, -gc["center_max"], gc["center_max"]))
                 self._base = []
             return
-        t = ff.t
+        t, d = ff.t, g - self.center
         if self.win and t - self.win[-1][0] > gc["max_gap_s"]:
-            self.win.clear()
-        self.win.append((t, g - self.center))
+            self.clear_window()
+        # glanced back across the midline (against the side the window leans to): restart
+        lean = self.value if self.value is not None else 0.0
+        if abs(lean) >= gc["deviation"] / 2 and np.sign(lean) * d <= -gc["cross"]:
+            self._cross_since = self._cross_since if self._cross_since is not None else t
+            if t - self._cross_since >= gc["cross_s"]:
+                self.clear_window()
+        else:
+            self._cross_since = None
+        self.win.append((t, d))
         while self.win and self.win[0][0] < t - gc["window_s"]:
             self.win.popleft()
         vals = np.array([d for _, d in self.win])
@@ -150,7 +163,7 @@ class Step:
                       # `say`) + 2.5 s; stretched to fit a longer recorded clip (voice.py). On one person's webcam calibration (Nov 14 2026) the
                       # eyes moved ~2 s after the prompt ended; patients may be slower.
     measure: float = 0.0
-    kind: str | None = None  # "gaze" | "arms" | "legs" | None
+    kind: str | None = None  # "gaze" | "arms" | None
 
     @property
     def length(self) -> float:
@@ -170,9 +183,6 @@ STEPS = (
          8.5, 10.0, "arms"),
     Step("arms_rest", "Thank you. You can lower your arms and open your eyes.",
          "Lower your arms, open your eyes", 4.0),
-    Step("legs", "Now lift both legs up, and hold them there.", "Lift both legs and hold",
-         5.5, 5.0, "legs"),
-    Step("legs_rest", "Thank you. Lower your legs.", "Lower your legs", 2.5),
 )
 DONE_OK = "That's all, thank you."
 DONE_FLAGGED = "That's all, thank you. A nurse has been told."
@@ -190,9 +200,10 @@ RETRY_STEPS = (
          4.0, 4.0, "gaze"),
     Step("look_right_2", "Now look to your right.", "Look to your RIGHT", 3.0, 4.0, "gaze"),
 )
-LEG_STEPS = ("legs", "legs_rest")
-LIMB_STEPS = ("arms", "arms_rest", *LEG_STEPS)
-COMPONENT_NAMES = {"eyes": "Eyes", "arms": "Arm drift", "legs": "Leg drift"}
+LIMB_STEPS = ("arms", "arms_rest")
+COMPONENT_NAMES = {"eyes": "Eyes", "arms": "Arm drift"}
+# Single-part checks started from the bed page ("Hand test" = arm drift only).
+ONLY_STEPS = {"arms": ("intro", "arms", "arms_rest")}
 
 
 GAZE_STEPS = ("center", "look_left", "look_right")
@@ -212,7 +223,8 @@ def fit_to_voice(st: Step) -> Step:
 
 def _comp(status: str, detail: str, side: str | None = None, issues: list[str] | None = None,
           **values) -> dict:
-    """status: normal | abnormal | no_response | inconclusive | not_assessed | skipped.
+    """status: normal | abnormal | inconclusive | not_assessed | skipped (no_response = old
+    name for limbs not raised, now inconclusive).
     inconclusive = the patient didn't follow the instructions well enough for a valid result
     (`issues` says how); not_assessed = the camera couldn't measure it."""
     return {"status": status, "detail": detail, "side": side, "issues": list(issues or []),
@@ -224,29 +236,29 @@ class ExamRunner:
     to speak. When `finished`, `result` holds the evaluation (None if cancelled)."""
 
     def __init__(self, cfg: dict, trigger: str, gaze_center: float | None = None,
-                 pose_error: str | None = None):
+                 pose_error: str | None = None, only: str | None = None):
         self.ec = exam_cfg(cfg)
         self.gc = gaze_cfg(cfg)
         self.trigger = trigger
         self.gaze_center = gaze_center
         self.pose_error = pose_error
+        # only="arms": the hand test (intro + arms out, palms up, 10 s), arm drift only
+        self.only = only
+        keys = ONLY_STEPS[only] if only else None
         self.steps = [fit_to_voice(s) for s in STEPS
-                      if not (pose_error and s.key in LIMB_STEPS)
-                      and not (not self.ec["legs"] and s.key in LEG_STEPS)]
+                      if (keys is None or s.key in keys)
+                      and not (pose_error and s.key in LIMB_STEPS)]
         self.i = -1
         self.step_t0 = 0.0
         self.started_at: float | None = None
         self.last_t: float | None = None
-        self.data: dict[str, list] = {k: [] for k in (*GAZE_KEYS, "arms", "arms_pre", "legs",
-                                                      "legs_pre")}
+        self.data: dict[str, list] = {k: [] for k in (*GAZE_KEYS, "arms", "arms_pre")}
         self.yaws: dict[str, list[float]] = {k: [] for k in GAZE_KEYS}
         # gaze-step frames while measuring, and why the eyes weren't measured in some of them
         self.gaze_frames = {k: {"frames": 0, "closed": 0, "away": 0, "lost": 0}
                             for k in GAZE_KEYS}
         self.gaze_first: tuple[dict, dict] | None = None  # first try, if it was retried
         self.blink_max = (cfg.get("vision") or {}).get("blink_max", 0.45)
-        self.arm_frames = self.legs_seen = 0
-        self.skipped: set[str] = set()
         self.finished = False
         self.cancelled: str | None = None
         self.result: dict | None = None
@@ -259,7 +271,7 @@ class ExamRunner:
     @property
     def needs_pose(self) -> bool:
         st = self.step
-        return not self.finished and st is not None and st.key in ("arms", "legs")
+        return not self.finished and st is not None and st.key == "arms"
 
     @property
     def cue(self) -> tuple[str, float] | None:
@@ -274,7 +286,7 @@ class ExamRunner:
         if self.finished or st is None:
             return {"active": False}
         el = (self.last_t or self.step_t0) - self.step_t0
-        return {"active": True, "trigger": self.trigger, "started_at": self.started_at,
+        return {"active": True, "only": self.only, "trigger": self.trigger, "started_at": self.started_at,
                 "step": st.key, "label": st.label, "say": st.say,
                 "phase": "measuring" if st.kind and el >= st.settle else "listening",
                 "index": self.i + 1, "count": len(self.steps),
@@ -299,13 +311,10 @@ class ExamRunner:
         if st is None:
             return out
         el = t - self.step_t0
-        if st.key == "arms" and pose is not None:
-            self.arm_frames += 1
-            self.legs_seen += bool(pose.legs_visible)
         if st.kind and st.settle <= el < st.length:
             self._collect(st, ff, pose)
-        elif st.kind in ("arms", "legs") and el < 1.5 and pose is not None:
-            self.data[f"{st.kind}_pre"].append(pose)  # still listening: limbs at rest
+        elif st.kind == "arms" and el < 1.5 and pose is not None:
+            self.data["arms_pre"].append(pose)  # still listening: arms at rest
         if el >= st.length:
             out += self._advance(t)
         return out
@@ -323,15 +332,8 @@ class ExamRunner:
                 self.finished = True
                 flagged = self.result["flagged"]
                 return [DONE_FLAGGED if flagged else DONE_OK]
-            st = self.steps[self.i]
-            if st.key in LEG_STEPS and not self._legs_in_view():
-                self.skipped.add(st.key)
-                continue
             self.step_t0 = t
-            return [st.say]
-
-    def _legs_in_view(self) -> bool:
-        return self.arm_frames > 0 and self.legs_seen >= 0.5 * self.arm_frames
+            return [self.steps[self.i].say]
 
     def _collect(self, st: Step, ff: FrameFeatures, pose: PoseFeatures | None):
         if st.kind == "gaze":
@@ -352,24 +354,19 @@ class ExamRunner:
         elif st.kind == "arms":
             self.data["arms"].append((ff.t, pose.arm_l if pose else None,
                                       pose.arm_r if pose else None, ff.blink))
-        elif st.kind == "legs" and pose is not None:
-            self.data["legs"].append(pose)
 
     # ------------------------------------------------------------ evaluation
     def evaluate(self, t: float) -> dict:
-        comps = {"eyes": self._eval_gaze()}
-        if self.pose_error:
-            comps["arms"] = _comp("not_assessed", f"no pose analysis ({self.pose_error})")
-            comps["legs"] = _comp("not_assessed", f"no pose analysis ({self.pose_error})")
-        else:
-            comps["arms"] = self._eval_arms()
-            if not self.ec["legs"]:
-                comps["legs"] = _comp("skipped", "leg step turned off (exam.legs)")
-            elif "legs" in self.skipped:
-                comps["legs"] = _comp("skipped", "legs not in view of the camera")
-            else:
-                comps["legs"] = self._eval_legs()
+        if self.only == "arms":
+            comps = {"arms": _comp("not_assessed", f"no pose analysis ({self.pose_error})")
+                     if self.pose_error else self._eval_arms()}
+            return self._result(t, comps)
+        comps = {"eyes": self._eval_gaze(),
+                 "arms": _comp("not_assessed", f"no pose analysis ({self.pose_error})")
+                 if self.pose_error else self._eval_arms()}
+        return self._result(t, comps)
 
+    def _result(self, t: float, comps: dict) -> dict:
         findings = [f"{COMPONENT_NAMES[k]}: {c['detail']}" for k, c in comps.items()
                     if c["status"] == "abnormal"]
         assessed = [c for c in comps.values()
@@ -405,7 +402,7 @@ class ExamRunner:
                 summary += f". Normal: {', '.join(ok)}"
         else:
             summary = "No abnormal findings"
-        res = {"trigger": self.trigger, "started_at": self.started_at, "finished_at": t,
+        res = {"only": self.only, "trigger": self.trigger, "started_at": self.started_at, "finished_at": t,
                "components": comps, "findings": findings, "flagged": bool(findings),
                "abnormal": any(c["status"] == "abnormal" for c in comps.values()),
                "no_response": no_response, "weak_side": weak, "summary": summary,
@@ -668,36 +665,23 @@ class ExamRunner:
         sr = [(t, r) for t, _, r, _ in rows if r is not None]
         blinks = [b for *_, b in rows if b is not None]
         eyes = "" if not blinks or np.mean(np.array(blinks) > 0.5) >= 0.5 else " (eyes stayed open)"
-        return self._limb_verdict("arm", sl, sr, n_min, eyes, rest=self._rest("arms", "arm", "arm"),
+        return self._limb_verdict("arm", sl, sr, n_min, eyes, rest=self._rest(),
                                   gain=ec["arm_raise_gain"], up_min=ec["arm_up_min"],
+                                  up_already=ec["arm_up_already"],
                                   drift=ec["arm_drift"], asym=ec["arm_drift_asym"],
                                   fell=ec["arm_fell"], unit="shoulder widths")
 
-    def _rest(self, kind: str, joint_l: str, joint_r: str) -> tuple[float | None, float | None]:
-        """Median limb height while the patient was still hearing the prompt."""
-        pre = self.data[f"{kind}_pre"]
+    def _rest(self) -> tuple[float | None, float | None]:
+        """Median arm heights while the patient was still hearing the prompt."""
+        pre = self.data["arms_pre"]
 
         def med(attr):
             v = [getattr(p, attr) for p in pre if getattr(p, attr) is not None]
             return float(np.median(v)) if v else None
-        return med(f"{joint_l}_l"), med(f"{joint_r}_r")
-
-    def _eval_legs(self) -> dict:
-        rows, ec = self.data["legs"], self.ec
-        n_min = max(ec["min_samples"], 0.4 * len(rows))
-
-        def series(rows, side):  # ankles if mostly visible, else knees
-            a = [(p.t, getattr(p, f"leg_{side}")) for p in rows if getattr(p, f"leg_{side}") is not None]
-            k = [(p.t, getattr(p, f"knee_{side}")) for p in rows if getattr(p, f"knee_{side}") is not None]
-            return (a, "leg") if len(a) >= 0.6 * max(len(rows), 1) else (k, "knee")
-
-        (sl, jl), (sr, jr) = series(rows, "l"), series(rows, "r")
-        return self._limb_verdict("leg", sl, sr, n_min, "", rest=self._rest("legs", jl, jr),
-                                  gain=ec["leg_raise_gain"], up_min=None, drift=ec["leg_drift"],
-                                  asym=ec["leg_drift_asym"], fell=None, unit="body widths")
+        return med("arm_l"), med("arm_r")
 
     def _limb_verdict(self, limb, sl, sr, n_min, note, rest, gain, up_min, drift, asym, fell,
-                      unit) -> dict:
+                      unit, up_already=None) -> dict:
         vis_l, vis_r = len(sl) >= n_min, len(sr) >= n_min
         if not (vis_l or vis_r):
             return _comp("not_assessed", f"{limb}s not in view of the camera")
@@ -716,11 +700,15 @@ class ExamRunner:
 
         def raised(start, r):  # higher than at rest; if rest wasn't seen: plainly up (arms ~ 0)
             if r is not None:
-                return start - r >= gain
+                # already up while the prompt played: there's no rise to see, but it's raised
+                early = up_already is not None and r >= up_already and start >= up_already
+                return start - r >= gain or early
             return up_min is None or start >= up_min
         up_l, up_r = raised(s_l, rest[0]), raised(s_r, rest[1])
-        if not (up_l or up_r):
-            return _comp("no_response", f"{limb}s were not raised", **vals)
+        if not (up_l or up_r):  # instructions not followed: no verdict (a weak limb would
+            # still leave the other one up, which is the "not raised" sign below)
+            why = f"did not raise the {limb}s"
+            return _comp("inconclusive", f"instructions not followed: {why}", issues=[why], **vals)
         if up_l != up_r:
             if abs(s_l - s_r) >= self.ec["raise_asym"]:
                 weak = "LEFT" if not up_l else "RIGHT"
@@ -742,8 +730,9 @@ class ExamRunner:
                                      f"({dw:.2f} vs {do:.2f} {unit} in {self._hold(limb)} s){note}",
                          weak, **vals)
         if d_l >= 1.0 and d_r >= 1.0:
-            return _comp("not_assessed", f"both {limb}s were lowered before the end of the hold"
-                                         f"{note}", **vals)
+            why = f"lowered both {limb}s before the end of the hold"
+            return _comp("inconclusive", f"instructions not followed: {why}{note}", issues=[why],
+                         **vals)
         if d_l >= drift and d_r >= drift:
             return _comp("normal", f"both {limb}s sank about equally (tiredness?){note}", **vals)
         return _comp("normal", f"both {limb}s held steady{note}", **vals)
@@ -811,9 +800,10 @@ class ServerVoice:
 
 
 # ============================================================================ self-test
-def _run_sim(scenario, cfg, el0: float, fps: float = 10, gaze_center: float = 0.0):
+def _run_sim(scenario, cfg, el0: float, fps: float = 10, gaze_center: float = 0.0,
+             only: str | None = None):
     rng = np.random.default_rng(1)
-    ex = ExamRunner(cfg, "selftest", gaze_center=gaze_center)
+    ex = ExamRunner(cfg, "selftest", gaze_center=gaze_center, only=only)
     said, el = [], el0
     while not ex.finished and el < el0 + 120:
         cue = ex.cue
@@ -829,13 +819,13 @@ def _selftest():
     from .mock import SimScenario
 
     cfg = load_config()
-    # normal patient: everything normal, legs skipped (sim legs aren't in view)
+    # normal patient: everything normal
     res, said = _run_sim(SimScenario(label="normal"), cfg, el0=50)
     print("normal:", res["summary"], "|", {k: c["status"] for k, c in res["components"].items()})
     assert not res["flagged"], res
     assert res["components"]["eyes"]["status"] == "normal"
     assert res["components"]["arms"]["status"] == "normal"
-    assert res["components"]["legs"]["status"] == "skipped"
+    assert list(res["components"]) == ["eyes", "arms"], res["components"]
     assert said[0].startswith("This is StrokeWatch") and said[-1] == "That's all, thank you."
 
     # new LEFT weakness: eyes deviate RIGHT, can't look left, left arm drifts
@@ -849,6 +839,30 @@ def _selftest():
     assert res["localization"]["hemisphere"] == "RIGHT", res["localization"]
     print("  ->", res["localization"]["text"])
     assert said[-1].endswith("A nurse has been told.")
+
+    # hand test (arm drift only): normal patient, then a left-weak one
+    res, said = _run_sim(SimScenario(label="normal"), cfg, el0=50, only="arms")
+    print("hand test normal:", res["summary"], "|", said)
+    assert list(res["components"]) == ["arms"] and not res["flagged"], res
+    assert res["components"]["arms"]["status"] == "normal", res
+    assert said[1].startswith("Close your eyes") and said[-1] == DONE_OK, said
+    res, said = _run_sim(SimScenario(label="left arm", side=1, arm_weak_at=10), cfg, el0=50,
+                         only="arms")
+    print("hand test left arm:", res["summary"])
+    assert res["components"]["arms"]["status"] == "abnormal", res
+    assert res["weak_side"] == "LEFT" and res["flagged"] and said[-1] == DONE_FLAGGED, res
+    res = ExamRunner(cfg, "selftest", only="arms", pose_error="no model").evaluate(1.0)
+    assert res["components"]["arms"]["status"] == "not_assessed" and not res["flagged"], res
+    # hand test, arms never raised: instructions not followed -> inconclusive, no alert
+    class StaysStill(SimScenario):
+        def pose(self, t, el, cue, rng):
+            return super().pose(t, el, None, rng)
+    res, said = _run_sim(StaysStill(label="still"), cfg, el0=50, only="arms")
+    arms = res["components"]["arms"]
+    print("hand test, arms not raised:", res["summary"])
+    assert arms["status"] == "inconclusive" and arms["issues"] == ["did not raise the arms"], arms
+    assert res["inconclusive"] == ["arms"] and not res["flagged"] and said[-1] == DONE_OK, res
+    assert res["summary"].startswith("Arm drift inconclusive, instructions not followed"), res
 
     # late raiser: both arms still rising when measuring starts, then the left sinks
     ex = ExamRunner(cfg, "selftest", gaze_center=0.0)
@@ -948,6 +962,22 @@ def _selftest():
     assert res["components"]["eyes"]["status"] == "inconclusive", res
     assert res["no_response"] and res["flagged"], res
 
+    # live hand test (Nov 14): arms already up while the prompt played (rest 1.47/1.52 = start
+    # 1.55), right arm let sink 0.42 -> right arm drift, not "did not raise the arms"
+    e = ExamRunner(cfg, "selftest", only="arms")
+    e.data["arms_pre"] = [PoseFeatures(t=0, arm_l=1.47, arm_r=1.52)]
+    e.data["arms"] = [(i / 10, 1.55 - 0.005 * i / 10, 1.55 - 0.042 * i / 10, 0.8)
+                      for i in range(100)]
+    c = e._eval_arms()
+    print("arms already up, right sinks:", c["status"], "-", c["detail"])
+    assert c["status"] == "abnormal" and c["side"] == "RIGHT", c
+    # already up but then lowered right away (both): still not a valid hold
+    e.data["arms"] = [(i / 10, 1.5 if i < 15 else -1.4, 1.5 if i < 15 else -1.4, 0.8)
+                      for i in range(100)]
+    c = e._eval_arms()
+    print("already up, then both lowered:", c["status"], "-", c["detail"])
+    assert c["status"] == "inconclusive", c
+
     # patterns from the first live run: flipping tracking, and both arms lowered together
     def arms_case(left, right):
         e = ExamRunner(cfg, "selftest", gaze_center=0.0)
@@ -961,7 +991,7 @@ def _selftest():
     both_down = lambda off: (lambda t: (1.0 - off) if t < 6.5 else -1.3)  # noqa: E731
     c = arms_case(both_down(0.2), both_down(0.0))
     print("both lowered early:", c["status"], "-", c["detail"])
-    assert c["status"] != "abnormal", c
+    assert c["status"] == "inconclusive", c
 
     # no response at all (e.g. confused/aphasic, or a photo): flagged as such
     ex = ExamRunner(cfg, "selftest", gaze_center=0.0)
@@ -989,6 +1019,25 @@ def _selftest():
             assert gm.deviation is None, (el, gm.status())
     print(f"gaze deviation flagged at {flagged_at:.1f}s (deviation from 60 s)")
     assert flagged_at is not None and 60 < flagged_at < 65 + gm.gc["window_s"]
+
+    # healthy person holding the right side for 3 min, glancing back left 1 s every 20 s:
+    # never a deviation. Same hold with no glance back: flagged after the window.
+    def hold_right(glance_every):
+        g = GazeMonitor(cfg)
+        g.center = 0.0
+        r = np.random.default_rng(6)
+        for i in range(1800):
+            el = i / 10
+            back = glance_every and el % glance_every < 1.0 and el > 1
+            g.update(FrameFeatures(t=el, yaw=0.0, gaze_h=(0.05 if back else -0.13)
+                                   + float(r.normal(0, 0.01))))
+            if g.deviation:
+                return el
+        return None
+    assert hold_right(20) is None, hold_right(20)
+    t_dev = hold_right(None)
+    print(f"held right, glancing back every 20 s: no trigger; never glancing back: {t_dev:.0f} s")
+    assert t_dev is not None and t_dev < 1.2 * gm.gc["window_s"], t_dev
     print("befast selftest OK")
 
 

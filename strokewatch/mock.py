@@ -103,8 +103,7 @@ class SimScenario:
 
     def pose(self, t: float, el: float, cue: tuple[str, float] | None,
              rng: np.random.Generator) -> PoseFeatures:
-        """Arm heights (shoulder widths, wrist above shoulder). Legs are out of view, as
-        with a face-height camera, so the check skips the leg step."""
+        """Arm heights (shoulder widths, wrist above shoulder)."""
         key, ce = cue if cue else (None, 0.0)
         heights = {}
         for s, sign in (("l", 1), ("r", -1)):
@@ -118,7 +117,7 @@ class SimScenario:
                     h = max(-1.4, top - 0.07 * (ce - 8.0))
             heights[s] = h + float(rng.normal(0, 0.03))
         self._pose = PoseFeatures(t=t, arm_l=round(heights["l"], 4), arm_r=round(heights["r"], 4),
-                                  shoulders=True, legs_visible=False)
+                                  shoulders=True)
         return self._pose
 
     def draw(self, ff: FrameFeatures, el: float, cue: tuple[str, float] | None = None

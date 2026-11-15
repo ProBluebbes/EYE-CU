@@ -52,7 +52,7 @@ const STATE_TEXT = { baselining: "Building baseline", monitoring: "Monitoring",
 // Two sources share it: BE-FAST check steps (with an arrow) and the guided head-turn
 // calibration. A running check has priority; the calibration prompt comes back after it.
 // Front camera: the screen faces the patient, so "←" is the patient's own left.
-const ARROWS = { look_left: "←", look_right: "→", center: "●", arms: "↑ ↑", legs: "↑" };
+const ARROWS = { look_left: "←", look_right: "→", center: "●", arms: "↑ ↑" };
 let exam = null;         // { step, text } while a check prompt is shown
 let calPrompt = null;    // current calibration prompt from the status, or null
 let promptTimer = null;  // hides the check's "done" prompt after a few seconds

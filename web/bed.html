@@ -19,19 +19,23 @@
   <main>
     <section class="video-col">
       <img id="video" alt="live camera">
-      <div id="skip" class="chip">–</div>
+      <div class="video-row">
+        <div id="skip" class="chip">–</div>
+        <button id="overlay-toggle" class="overlay-toggle" aria-pressed="true"
+          title="Show or hide the face landmarks (lines and dots) on this video">Hide landmarks</button>
+      </div>
     </section>
 
     <section class="side-col">
       <div class="card" id="befast">
-        <div class="card-title">BE-FAST check <span class="muted">(eyes · arms · legs, voice-guided)</span></div>
+        <div class="card-title">BE-FAST check <span class="muted">(eyes · arms, voice-guided)</span></div>
         <div id="exam-live" class="exam-live" hidden>
           <div class="exam-step"><span id="exam-idx" class="muted"></span> <b id="exam-label"></b></div>
           <div id="exam-say" class="muted"></div>
           <div class="exam-bar"><div id="exam-prog"></div></div>
           <div id="exam-trigger" class="muted"></div>
         </div>
-        <div id="exam-result" class="exam-result"><span class="muted">Starts by itself on facial droop or a fixed gaze, or run it now.</span></div>
+        <div id="exam-result" class="exam-result"><span class="muted">Starts by itself on a fixed gaze, or run it now.</span></div>
         <div class="gaze-row" title="Horizontal eye position vs. this patient's centre (same orientation as the video)">
           <span>gaze</span>
           <div class="gtrack"><div class="gthr" id="gthr-r"></div><div class="gthr" id="gthr-l"></div>
@@ -41,6 +45,7 @@
         <div class="glabels muted"><span>patient's right</span><span>patient's left</span></div>
         <div class="exam-btns">
           <button id="exam-start">Run BE-FAST check</button>
+          <button id="hand-start" title="Arms out in front, palms up, eyes closed, 10 s: checks arm drift only (~25 s)">Hand test</button>
           <button id="exam-cancel" class="danger" hidden>Stop check</button>
         </div>
         <div id="sound-row" class="sound-row" hidden>

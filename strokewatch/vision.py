@@ -1,5 +1,5 @@
 """Video source -> MediaPipe face landmarks -> per-frame asymmetry features (+ eye gaze),
-and MediaPipe pose landmarks -> arm/leg heights (used by the BE-FAST check, befast.py).
+and MediaPipe pose landmarks -> arm heights (used by the BE-FAST check, befast.py).
 
 Run on its own to see the overlay and live feature values:
     python -m strokewatch.vision --source 0
@@ -39,10 +39,7 @@ EYE_SPANS = ((EYE_OUT_R, EYE_IN_R), (EYE_IN_L, EYE_OUT_L))
 
 # MediaPipe pose indices (patient's left/right, like the face).
 SH_L, SH_R, EL_L, EL_R, WR_L, WR_R = 11, 12, 13, 14, 15, 16
-HIP_L, HIP_R, KN_L, KN_R, AN_L, AN_R = 23, 24, 25, 26, 27, 28
-POSE_LINES = [(SH_L, SH_R), (SH_L, EL_L), (EL_L, WR_L), (SH_R, EL_R), (EL_R, WR_R),
-              (SH_L, HIP_L), (SH_R, HIP_R), (HIP_L, HIP_R), (HIP_L, KN_L), (KN_L, AN_L),
-              (HIP_R, KN_R), (KN_R, AN_R)]
+POSE_LINES = [(SH_L, SH_R), (SH_L, EL_L), (EL_L, WR_L), (SH_R, EL_R), (EL_R, WR_R)]
 
 # OpenCV camera frame (x right, y down, z forward) <-> OpenGL frame used by the
 # MediaPipe pose matrix (x right, y up, z toward viewer).
@@ -249,18 +246,13 @@ def horizontal_gaze(p2: np.ndarray) -> float | None:
 
 @dataclass
 class PoseFeatures:
-    """Limb heights above their root joint, in body widths (+ = higher), from MediaPipe pose.
-    'Up' is perpendicular to the shoulder line (hip line if shoulders are hidden), so a leaning
-    body doesn't look like drift. None = joint not visible."""
+    """Arm heights (wrist above shoulder) in shoulder widths (+ = higher), from MediaPipe pose.
+    'Up' is perpendicular to the shoulder line, so a leaning body doesn't look like drift.
+    None = joint not visible."""
     t: float
     arm_l: float | None = None   # wrist above shoulder / shoulder width
     arm_r: float | None = None
-    leg_l: float | None = None   # ankle above hip / body width
-    leg_r: float | None = None
-    knee_l: float | None = None  # knee above hip / body width (fallback when ankles are hidden)
-    knee_r: float | None = None
     shoulders: bool = False
-    legs_visible: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -285,7 +277,6 @@ def compute_pose_features(landmarks, w: int, h: int, t: float, vis_min: float = 
         return up, n
 
     pf = PoseFeatures(t=t)
-    up, width = None, None
     if ok(SH_L) and ok(SH_R):
         up, width = up_and_width(SH_L, SH_R)
         if width > 1:
@@ -293,21 +284,11 @@ def compute_pose_features(landmarks, w: int, h: int, t: float, vis_min: float = 
             for wr, sh, attr in ((WR_L, SH_L, "arm_l"), (WR_R, SH_R, "arm_r")):
                 if ok(wr):
                     setattr(pf, attr, round(float((xy[wr] - xy[sh]) @ up) / width, 4))
-    if ok(HIP_L) and ok(HIP_R):
-        hup, hw = up_and_width(HIP_L, HIP_R)
-        if up is None or not pf.shoulders:
-            up, width = hup, hw * 1.4  # hips are ~0.7 shoulder widths
-        if width and width > 1:
-            for j, hip, attr in ((AN_L, HIP_L, "leg_l"), (AN_R, HIP_R, "leg_r"),
-                                 (KN_L, HIP_L, "knee_l"), (KN_R, HIP_R, "knee_r")):
-                if ok(j):
-                    setattr(pf, attr, round(float((xy[j] - xy[hip]) @ up) / width, 4))
-            pf.legs_visible = all(v is not None for v in (pf.knee_l, pf.knee_r))
     return pf
 
 
 class PoseAnalyzer:
-    """MediaPipe Pose Landmarker; only run while the BE-FAST check needs arms/legs."""
+    """MediaPipe Pose Landmarker; only run while the BE-FAST check needs the arms."""
 
     def __init__(self, cfg: dict):
         vc = cfg["vision"]
@@ -344,7 +325,7 @@ class PoseAnalyzer:
 
 
 def draw_pose(frame: np.ndarray, px: np.ndarray | None) -> np.ndarray:
-    """Arm/leg skeleton (in place); joints that aren't visible (NaN) are left out."""
+    """Arm skeleton (in place); joints that aren't visible (NaN) are left out."""
     if px is None:
         return frame
     for a, b in POSE_LINES:
@@ -352,7 +333,7 @@ def draw_pose(frame: np.ndarray, px: np.ndarray | None) -> np.ndarray:
             continue
         cv2.line(frame, tuple(int(v) for v in px[a]), tuple(int(v) for v in px[b]),
                  (240, 180, 60), 3, cv2.LINE_AA)
-    for i in (SH_L, SH_R, EL_L, EL_R, WR_L, WR_R, HIP_L, HIP_R, KN_L, KN_R, AN_L, AN_R):
+    for i in (SH_L, SH_R, EL_L, EL_R, WR_L, WR_R):
         if not np.isnan(px[i]).any():
             cv2.circle(frame, tuple(int(v) for v in px[i]), 5, (255, 220, 120), -1, cv2.LINE_AA)
     return frame
