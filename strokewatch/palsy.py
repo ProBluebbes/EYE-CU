@@ -1,5 +1,5 @@
 """Combined droop detection (the default): StrokeWatch's baseline-change score + a learned facial-palsy model
-(palsynet 3D-CNN, src/palsynet) measured against this patient's own first seconds.
+(palsynet TCN by default, src/palsynet; set in config.yaml) measured against this patient's own first seconds.
 
 Why: StrokeWatch's own detector is precise but skips every frame with the head moving or tilted, so with a
 restless patient it may never finish its baseline. The learned model keeps scoring while the head moves; raw it
@@ -8,10 +8,10 @@ recorded clips with a synthetic one-sided mouth droop (scripts/droop_benchmark.p
 caught 18/36 droops with no false alerts; StrokeWatch alone caught 6/36 (all on the still clip).
 
 Decision, every model update (0.5 s):
-    combined = StrokeWatch score / its threshold   (0 while it is still building its baseline)
+    combined = sw_weight x StrokeWatch score / its threshold   (0 while it is still building its baseline)
              + model_weight x (logit(p) - median logit(p) over the model's first `baseline_s` seconds)
                                                      (0 until that is built)
-    p = 3D-CNN p(affected) on the last 2 s, averaged over the last `avg_windows` updates (5 fold models averaged)
+    p = model p(affected) on the last 2 s, averaged over the last `avg_windows` updates (5 fold models averaged)
     ALERT when combined >= `line` continuously for detector.alert_seconds (6 s).
     model_weight 1.0 / line 1.74 (config.yaml); windows with the head turned > yaw_gate_deg do not count.
 
@@ -93,6 +93,7 @@ def configure(cfg: dict, enabled: bool = True, model_dir: str | None = None) -> 
     _cfg = pc
     print(f"droop detection: Eye-CU + {_model.name} ({len(_model.models)} folds, {_model.device}) "
           f"vs the patient's first {pc.get('baseline_s', 20)} s, model weight {pc.get('model_weight', 1.0)}, "
+          f"Eye-CU weight {pc.get('sw_weight', 1.74)}, "
           f"line {pc.get('line', 1.74)}")
     return True
 
@@ -117,6 +118,9 @@ class CombinedDroop:
         self.max_gap = max(1, round(0.5 * analysis_fps))
         self.line = float(self.pc.get("line", 1.74))
         self.model_weight = float(self.pc.get("model_weight", 1.0))
+        # StrokeWatch's score / its threshold is scaled by this; = line means StrokeWatch at its own threshold
+        # raises the alert on its own, as it does without the model
+        self.sw_weight = float(self.pc.get("sw_weight", 1.74))
         self.baseline_s = float(self.pc.get("baseline_s", 20))
         self.hop_s = float(self.pc.get("hop_s", 0.5))
         self.smooth = int(self.pc.get("smooth_frames", 3))
@@ -220,7 +224,7 @@ class CombinedDroop:
     def decide(self, t: float, det_state: str, det_score: float, det_threshold: float) -> bool:
         """Update the combined score at a model step. Returns True when it has been above the line for
         alert_seconds (the bed then raises its ALERT)."""
-        self.sw_term = 0.0 if det_state == "baselining" else det_score / det_threshold
+        self.sw_term = 0.0 if det_state == "baselining" else self.sw_weight * det_score / det_threshold
         self.model_term = self.model_weight * (self.rel if self.rel is not None else 0.0)
         self.score = self.sw_term + self.model_term
         dt = 0.0 if self.last_t is None else min(max(t - self.last_t, 0.0), 1.0)
@@ -243,7 +247,7 @@ class CombinedDroop:
     def status(self) -> dict:
         return {"state": self.state, "model": self.M.name, "p": self.p_avg, "relative": self.rel,
                 "sw_term": round(self.sw_term, 3), "model_term": round(self.model_term, 3),
-                "model_weight": self.model_weight, "score": round(self.score, 3), "line": self.line,
+                "model_weight": self.model_weight, "sw_weight": self.sw_weight, "score": round(self.score, 3), "line": self.line,
                 "above_seconds": round(self.above, 2), "head_turned": self.turned, "yaw_gate": self.yaw_gate,
                 "baseline_progress": 1.0 if self.base_median is not None else (
                     0.0 if self.base_start is None or self.last_t is None

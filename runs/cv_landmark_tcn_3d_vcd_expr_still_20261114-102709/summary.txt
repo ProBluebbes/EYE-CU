@@ -1,0 +1,16 @@
+5 folds, 49 test videos (video-level)
+
+metric                 mean ± std over folds    pooled
+accuracy                     0.896 ± 0.070     0.898
+balanced_accuracy            0.903 ± 0.064     0.907
+f1                           0.887 ± 0.080     0.898
+auc                          1.000 ± 0.000     1.000
+
+pooled confusion (rows=true unaffected/affected): [[22 0] [5 22]]
+
+misclassified videos:
+  affected_9       p(affected)=0.270
+  affected_20      p(affected)=0.346
+  affected_2       p(affected)=0.325
+  affected_10      p(affected)=0.195
+  affected_22      p(affected)=0.500

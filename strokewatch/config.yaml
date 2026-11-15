@@ -131,7 +131,7 @@ detector:
 # detector.alert_seconds. Missing model folder or server --no-palsy: StrokeWatch's detector alone, as before.
 palsy:
   enabled: true
-  model_dir: runs/cv_landmark_geom_cnn_20261114-212730   # palsynet 3D-CNN (face-surface CNN), 5 folds averaged
+  model_dir: runs/cv_landmark_tcn_3d_vcd_expr_still_20261114-102709   # palsynet TCN, 5 folds averaged (droop benchmark: 14/36 vs 3D-CNN 13/36, both 0 false; ~2.5x lighter)
   # The model counts for much less than StrokeWatch's own score (Nov 14 2026). At weight 1 / line 1.74 (picked on
   # held-out benchmark clips at <= 1% flagged no-droop moments; 18/36 synthetic droops vs 6/36 for StrokeWatch
   # alone, but those droops were >= ~5 mm) it alerted later than StrokeWatch alone on 2-3 mm droops. The line
@@ -140,7 +140,8 @@ palsy:
   # untouched clips) weight 0.25 caught exactly what StrokeWatch alone caught (6/36); 0.5 13/36, 0.75 17/36,
   # 1.0 18/36, all with 0/6 false alerts. Smallest (~4 mm) droops: 8.6 s to alert at 1.0 vs 8.1 s at 0.25.
   model_weight: 1.0
-  line: 1.74
+  sw_weight: 1.25            # x StrokeWatch score/threshold (alone it alerts at 1.6x its threshold; benchmark 14/36, 0 false)
+  line: 2.0                   # alert line (benchmark: 14/36 caught, 0 false at 1.74-2.0; 12/36 at 2.1)
   # The model only counts while the head faces the camera: a 2 s window with the head turned more than this
   # (deg, left/right) adds nothing and StrokeWatch alone decides. Live, full weight with no gate gave false
   # alerts on head turns; on the benchmark the 15 deg gate keeps 13/36 droops (StrokeWatch alone 6/36), 0/6

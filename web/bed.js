@@ -16,13 +16,16 @@ const chart = new Chart($("chart"), {
     datasets: [
       { label: "Change score", data: [], borderColor: "#1068c4", backgroundColor: "rgba(16,104,196,0.08)", fill: true, borderWidth: 2, pointRadius: 0, spanGaps: false },
       { label: "Alert threshold", data: [], borderColor: "#c4262e", borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0 },
+      // the two parts that add up to the change score (combined detection only)
+      { label: "Eye-CU detector part", data: [], borderColor: "#7d8ea0", borderWidth: 1.5, pointRadius: 0, spanGaps: false },
+      { label: "Palsy model part", data: [], borderColor: "#3a90a2", borderWidth: 1.5, pointRadius: 0, spanGaps: false },
     ],
   },
   options: {
     animation: false, maintainAspectRatio: false, parsing: false,
     scales: {
       x: { type: "linear", ticks: { color: "#5f7489", callback: (v) => `${Math.round(v)}s` }, grid: { color: "#e6edf4" } },
-      y: { min: 0, suggestedMax: 6, ticks: { color: "#5f7489" }, grid: { color: "#e6edf4" } },
+      y: { suggestedMin: 0, suggestedMax: 6, ticks: { color: "#5f7489" }, grid: { color: "#e6edf4" } },
     },
     plugins: { legend: { labels: { color: "#13293d", boxWidth: 18 } } },
   },
@@ -31,11 +34,14 @@ const chart = new Chart($("chart"), {
 function pushChart(s) {
   if (t0 === null) t0 = s.t;
   const x = s.t - t0;
-  const [score, thr] = chart.data.datasets;
+  const [score, thr, swPart, mdPart] = chart.data.datasets;
   // combined detection scores while Eye-CU's detector is still building its baseline; the detector alone does not
   const scored = s.combined ? s.combined.state === "scoring" || s.state !== "baselining" : s.state !== "baselining" && s.valid;
   score.data.push({ x, y: scored ? s.score : null });
   thr.data.push({ x, y: s.threshold });
+  const c = s.combined;
+  swPart.data.push({ x, y: c && scored ? c.sw_term : null });
+  mdPart.data.push({ x, y: c && scored ? c.model_term : null });
   for (const ds of chart.data.datasets) {
     while (ds.data.length && ds.data[0].x < x - WINDOW_S) ds.data.shift();
   }
@@ -161,6 +167,10 @@ function render(s) {
   else { skip.className = "pill ok"; skip.textContent = s.invalid_reason ? `Tracking (${s.invalid_reason})` : "Face tracked"; }
 
   $("score").textContent = s.state === "baselining" ? "–" : s.score.toFixed(2);
+  const cb = s.combined;
+  $("sw-part").textContent = cb ? cb.sw_term.toFixed(2) : "–";
+  $("model-part").textContent = !cb ? "–" : cb.head_turned ? "paused (head turned)"
+    : cb.relative == null ? (cb.state || "–") : cb.model_term.toFixed(2);
   $("above").textContent = `${s.above_seconds.toFixed(1)} / ${s.alert_seconds} s`;
   const f = s.features || {};
   $("pose").textContent = f.yaw == null ? "–" : `${Math.round(f.yaw)}° / ${Math.round(f.pitch)}°`;
