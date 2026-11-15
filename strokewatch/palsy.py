@@ -81,17 +81,17 @@ def configure(cfg: dict, enabled: bool = True, model_dir: str | None = None) -> 
     global _model, _cfg
     pc = dict(cfg.get("palsy") or {})
     if not enabled or not pc.get("enabled", True):
-        print("droop detection: StrokeWatch detector only (palsy model off)")
+        print("droop detection: Eye-CU detector only (palsy model off)")
         return False
     path = model_dir or pc.get("model_dir")
     try:
         _model = PalsyModel(path, pc.get("device", "auto"))
     except Exception as e:  # missing folder / torch: run as before rather than not at all
-        print(f"warning: palsy model not loaded ({e}); droop alerts come from StrokeWatch's detector alone")
+        print(f"warning: palsy model not loaded ({e}); droop alerts come from Eye-CU's detector alone")
         _model = None
         return False
     _cfg = pc
-    print(f"droop detection: StrokeWatch + {_model.name} ({len(_model.models)} folds, {_model.device}) "
+    print(f"droop detection: Eye-CU + {_model.name} ({len(_model.models)} folds, {_model.device}) "
           f"vs the patient's first {pc.get('baseline_s', 20)} s, model weight {pc.get('model_weight', 1.0)}, "
           f"line {pc.get('line', 1.74)}")
     return True

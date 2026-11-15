@@ -20,8 +20,8 @@ OPEN_PATHS = {"/api/health"}  # used by the tunnel readiness check
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
 DENIED_HTML = b"""<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
-<title>StrokeWatch</title><body style="font:18px system-ui;background:#111;color:#eee;padding:24px">
-<h2>Access key needed</h2><p>Scan a QR code on the StrokeWatch dashboard
+<title>Eye-CU</title><body style="font:18px system-ui;background:#111;color:#eee;padding:24px">
+<h2>Access key needed</h2><p>Scan a QR code on the Eye-CU dashboard
 (<b>Add phone</b> button). Links change every time the server restarts.</p></body>"""
 
 

@@ -1,6 +1,6 @@
 """Pre-recorded voice prompts.
 
-Everything StrokeWatch says to a patient is a fixed sentence, so a natural voice is rendered
+Everything Eye-CU says to a patient is a fixed sentence, so a natural voice is rendered
 once (scripts/make_voice.py, ElevenLabs) into web/voice/*.mp3. The pages (phone and bed page,
 web/voice.js) play the clip for a sentence when there is one, otherwise the browser's own
 speech. web/voice/manifest.json maps sentence -> {"file", "seconds"}.
@@ -18,15 +18,15 @@ MANIFEST = VOICE_DIR / "manifest.json"
 
 # Lines the web pages say on their own (keep in sync with web/phone.js and web/bed.js).
 PAGE_LINES = (
-    "StrokeWatch camera on.",
-    "This is a voice test from StrokeWatch.",
+    "Eye-CU camera on.",
+    "This is a voice test from Eye-CU.",
     "Calibration starting.",
-    "This is a test from the StrokeWatch dashboard.",
+    "This is a test from the Eye-CU dashboard.",
 )
 
 
 def spoken_lines() -> list[str]:
-    """Every fixed sentence StrokeWatch can speak, in a stable order."""
+    """Every fixed sentence Eye-CU can speak, in a stable order."""
     from .befast import DONE_FLAGGED, DONE_OK, RETRY_STEPS, STEPS, STOPPED
     from .detector import CALIB_DONE, CALIB_PROMPTS
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from dataclasses import asdict, dataclass, field
 
 import cv2
@@ -43,6 +44,10 @@ class Bed(threading.Thread):
     def __init__(self, bed_id: str, name: str, cfg: dict, fps: float):
         super().__init__(daemon=True, name=f"bed-{bed_id}")
         self.bed_id, self.bed_name, self.cfg = bed_id, name, cfg
+        self.label: str | None = None  # shown under the bed name (e.g. which demo video)
+        self.patient: dict = {}         # staff-entered details (name, MRN, last known well…)
+        self.exam_history: deque = deque(maxlen=12)  # finished BE-FAST checks, newest first
+        self.on_event = None  # set by BedManager: fn(bed, kind, text, level) -> activity log
         self.bc = bed_cfg(cfg)
         self.interval = 1.0 / fps
         self.detector = Detector(cfg)
@@ -159,6 +164,10 @@ class Bed(threading.Thread):
             except Exception as e:  # speech is best-effort; never kill the bed thread
                 print(f"{self.bed_name}: could not speak: {e}")
 
+    def _event(self, kind: str, text: str, level: str = "info"):
+        if self.on_event:
+            self.on_event(self, kind, text, level)
+
     def _start_exam(self, trigger: str, t: float, only: str | None = None):
         pose_error = self.pose_problem()
         what = "hand test" if only == "arms" else "BE-FAST check"
@@ -167,10 +176,12 @@ class Bed(threading.Thread):
                               "trigger": trigger, "only": only, "started_at": t,
                               "finished_at": t, "summary": f"Hand test could not run: {pose_error}"}
             print(f"{self.bed_name}: {what} could not run: {pose_error}")
+            self._event("exam", f"Hand test could not run: {pose_error}", "warn")
             return
         self.exam = ExamRunner(self.cfg, trigger, gaze_center=self.gaze.center,
                                pose_error=pose_error, only=only)
         print(f"{self.bed_name}: {what} started ({trigger})")
+        self._event("exam", f"{what[0].upper()}{what[1:]} started ({trigger})")
 
     def _exam_tick(self, frame: np.ndarray, ff: FrameFeatures, det_state: str):
         """Handle staff requests and automatic triggers, then advance a running check.
@@ -205,13 +216,18 @@ class Bed(threading.Thread):
             self.gaze.clear_window()
             if ex.result is not None:
                 self.last_exam = ex.result
-                print(f"{self.bed_name}: {'hand test' if ex.only == 'arms' else 'BE-FAST check'} done: {ex.result['summary']}")
+                what = "Hand test" if ex.only == "arms" else "BE-FAST check"
+                print(f"{self.bed_name}: {what} done: {ex.result['summary']}")
+                self._event("exam", f"{what}: {ex.result['summary']}",
+                            "warn" if ex.result["flagged"] else "ok")
                 if self.on_exam_done:
                     self.on_exam_done(self, ex.result)
             else:
                 self.last_exam = {"cancelled": ex.cancelled, "trigger": ex.trigger, "only": ex.only,
                                   "started_at": ex.started_at, "finished_at": ff.t,
                                   "summary": f"Check stopped: {ex.cancelled}"}
+                self._event("exam", f"{'Hand test' if ex.only == 'arms' else 'BE-FAST check'} stopped ({ex.cancelled})")
+            self.exam_history.appendleft(self.last_exam)
         return ppx
 
     # ------------------------------------------------------------ worker
@@ -312,6 +328,8 @@ class Bed(threading.Thread):
                 self.thumb = thumb
         if st["state"] == "ALERT" and prev_state != "ALERT" and self.on_alert:
             self.on_alert(self, st)
+        if st["state"] == "monitoring" and prev_state == "baselining":
+            self._event("baseline", "Baseline complete: monitoring started", "ok")
 
 
 class CameraBed(Bed):
@@ -454,10 +472,14 @@ class Alert:
     exam: dict | None = None        # latest BE-FAST check result for this alert
     status: str = "active"          # active -> acknowledged -> resolved
     acked_at: float | None = None
+    acked_by: str | None = None     # staff initials, if given
     resolved_at: float | None = None
+    resolved_by: str | None = None
     resolution: str | None = None   # false_alarm | confirmed | reset | removed
     face_side: str | None = None    # side of the face droop, if the detector saw one
     localization: dict | None = None  # localize.localize(): hedged "may be a ... stroke"
+    # Stroke-protocol steps done for this alert: step key -> {"t": epoch, "by": initials}
+    checklist: dict = field(default_factory=dict)
 
     def relocalize(self):
         self.localization = localize(self.face_side, self.exam)
@@ -466,7 +488,16 @@ class Alert:
 
 
 RESOLUTIONS = {"false_alarm", "confirmed", "reset", "removed"}
+RES_TEXT = {"false_alarm": "false alarm", "confirmed": "confirmed, escalated",
+            "reset": "bed reset", "removed": "bed removed"}
+# Code-stroke checklist shown with an open alert (keys are stored; labels live in the web UI).
+CHECKLIST = {"team": "Stroke team paged", "glucose": "Glucose checked",
+             "nihss": "NIHSS done", "ct": "CT / CTA ordered",
+             "neuro": "Neurology at bedside", "decision": "Treatment decision"}
+PATIENT_FIELDS = {"name": 80, "mrn": 30, "age": 10, "sex": 10, "dx": 120, "attending": 60,
+                  "notes": 300}
 MAX_ALERTS = 200
+MAX_EVENTS = 400
 
 
 class BedManager:
@@ -478,12 +509,24 @@ class BedManager:
         self.lock = threading.Lock()
         self._next_alert_id = 1
         self._next_bed_num = 1
+        self._reserved: set[int] = set()
+        self.events: deque = deque(maxlen=MAX_EVENTS)  # activity log, newest first
+        self._ev_lock = threading.Lock()
+        self._ev_id = 0
+        self._seen_state: dict[str, str] = {}  # for offline/online events
         self.started = False
         self.say_hook = None  # set by the server: fn(bed, text, step) -> phone / local speaker
+
+    def reserve(self, n: int):
+        """Keep bed number n for a bed added with that number (allocate() skips it)."""
+        with self.lock:
+            self._reserved.add(n)
 
     def allocate(self) -> tuple[str, str]:
         """Next free (bed_id, default name), e.g. ("bed9", "Bed 9")."""
         with self.lock:
+            while self._next_bed_num in self._reserved:
+                self._next_bed_num += 1
             n = self._next_bed_num
             self._next_bed_num += 1
         return f"bed{n}", f"Bed {n}"
@@ -496,6 +539,7 @@ class BedManager:
             bed.on_alert = self._raise_alert
             bed.on_say = self._say
             bed.on_exam_done = self._exam_done
+            bed.on_event = lambda b, kind, text, level: self.log(b, kind, text, level)
             self.beds[bed.bed_id] = bed
         if self.started:
             bed.start()
@@ -534,6 +578,38 @@ class BedManager:
         for bed in beds:
             bed.stop()
 
+    # ------------------------------------------------------------ activity log
+    def log(self, bed: Bed | None, kind: str, text: str, level: str = "info",
+            by: str | None = None):
+        """Add an activity-log entry (any thread). level: info | ok | warn | alert."""
+        with self._ev_lock:
+            self._ev_id += 1
+            self.events.appendleft({"id": self._ev_id, "t": time.time(),
+                                    "bed_id": bed.bed_id if bed else None,
+                                    "bed_name": bed.bed_name if bed else None,
+                                    "kind": kind, "text": text, "level": level, "by": by})
+
+    def events_list(self, bed_id: str | None = None, limit: int = 60) -> list[dict]:
+        with self._ev_lock:
+            evs = list(self.events)
+        if bed_id:
+            evs = [e for e in evs if e["bed_id"] == bed_id]
+        return evs[:limit]
+
+    def set_patient(self, bed_id: str, data: dict, by: str | None = None) -> bool:
+        """Staff-entered patient details for a bed. lkw = last known well (epoch s) or None."""
+        bed = self.beds.get(bed_id)
+        if bed is None:
+            return False
+        p = {k: str(data.get(k) or "").strip()[:n] for k, n in PATIENT_FIELDS.items()}
+        p = {k: v for k, v in p.items() if v}
+        lkw = data.get("lkw")
+        if isinstance(lkw, (int, float)) and lkw > 0:
+            p["lkw"] = float(lkw)
+        bed.patient = p
+        self.log(bed, "patient", "Patient details updated", by=by)
+        return True
+
     # ------------------------------------------------------------ alerts
     def _open_alert(self, bed_id: str) -> Alert | None:  # caller holds self.lock
         return next((a for a in self.alerts if a.bed_id == bed_id and a.status != "resolved"),
@@ -559,6 +635,7 @@ class BedManager:
             self._next_alert_id += 1
             del self.alerts[MAX_ALERTS:]
         print(f"ALERT {bed.bed_name}: possible new {st.get('side')} droop")
+        self.log(bed, "alert", f"ALERT: possible new {st.get('side')} facial droop", "alert")
 
     def _say(self, bed: Bed, text: str, step: str | None):  # called from the bed's thread
         if self.say_hook:
@@ -590,6 +667,7 @@ class BedManager:
             self._next_alert_id += 1
             del self.alerts[MAX_ALERTS:]
         print(f"ALERT {bed.bed_name}: BE-FAST check: {res['summary']}")
+        self.log(bed, "alert", f"ALERT from BE-FAST check: {res['summary']}", "alert")
 
     def request_exam(self, bed_id: str, only: str | None = None) -> bool:
         bed = self.beds.get(bed_id)
@@ -609,15 +687,17 @@ class BedManager:
     def _find(self, alert_id: int) -> Alert | None:
         return next((a for a in self.alerts if a.id == alert_id), None)
 
-    def acknowledge(self, alert_id: int) -> bool:
+    def acknowledge(self, alert_id: int, by: str | None = None) -> bool:
         with self.lock:
             a = self._find(alert_id)
             if a is None or a.status != "active":
                 return False
-            a.status, a.acked_at = "acknowledged", time.time()
-            return True
+            a.status, a.acked_at, a.acked_by = "acknowledged", time.time(), by
+            bed = self.beds.get(a.bed_id)
+        self.log(bed, "ack", "Alert acknowledged", "info", by)
+        return True
 
-    def resolve(self, alert_id: int, resolution: str) -> bool:
+    def resolve(self, alert_id: int, resolution: str, by: str | None = None) -> bool:
         """Close the alert and rebuild that bed's baseline so monitoring can continue."""
         if resolution not in RESOLUTIONS:
             raise ValueError(resolution)
@@ -625,27 +705,47 @@ class BedManager:
             a = self._find(alert_id)
             if a is None or a.status == "resolved":
                 return False
-            self._close(a, resolution)
+            self._close(a, resolution, by)
             bed = self.beds.get(a.bed_id)
+        self.log(bed, "resolve", f"Alert closed: {RES_TEXT[resolution]}; baseline rebuilding",
+                 "ok" if resolution == "false_alarm" else "warn", by)
         if bed:
             bed.reset()
         return True
 
-    def reset_bed(self, bed_id: str, calibrate: bool = False) -> bool:
+    def checklist_step(self, alert_id: int, step: str, done: bool, by: str | None = None
+                       ) -> bool:
+        if step not in CHECKLIST:
+            raise ValueError(step)
+        with self.lock:
+            a = self._find(alert_id)
+            if a is None or a.status == "resolved":
+                return False
+            if done:
+                a.checklist[step] = {"t": time.time(), "by": by}
+            else:
+                a.checklist.pop(step, None)
+            bed = self.beds.get(a.bed_id)
+        self.log(bed, "protocol", f"{CHECKLIST[step]}{'' if done else ' (unchecked)'}", "info", by)
+        return True
+
+    def reset_bed(self, bed_id: str, calibrate: bool = False, by: str | None = None) -> bool:
         bed = self.beds.get(bed_id)
         if bed is None:
             return False
         with self.lock:
             for a in self.alerts:
                 if a.bed_id == bed_id and a.status != "resolved":
-                    self._close(a, "reset")
+                    self._close(a, "reset", by)
+        self.log(bed, "reset", "Guided head-turn calibration started" if calibrate
+                 else "Baseline reset by staff", "info", by)
         bed.reset(calibrate=calibrate)
         return True
 
     @staticmethod
-    def _close(a: Alert, resolution: str):
+    def _close(a: Alert, resolution: str, by: str | None = None):
         now = time.time()
-        a.status, a.resolution, a.resolved_at = "resolved", resolution, now
+        a.status, a.resolution, a.resolved_at, a.resolved_by = "resolved", resolution, now, by
         a.acked_at = a.acked_at or now
 
     # ------------------------------------------------------------ snapshots
@@ -659,8 +759,8 @@ class BedManager:
                                    "threshold": self.cfg["detector"]["threshold"],
                                    "pre_threshold": self.cfg["detector"]["pre_threshold"],
                                    "baseline_progress": 0.0, "invalid_reason": None}
-        out.update(bed_id=bed.bed_id, bed_name=bed.bed_name, kind=bed.kind,
-                   detector_state=out["state"],
+        out.update(bed_id=bed.bed_id, bed_name=bed.bed_name, kind=bed.kind, label=bed.label,
+                   patient=bed.patient, detector_state=out["state"], server_time=now,
                    last_frame_age=round(now - last, 1) if last else None)
         if isinstance(bed, PhoneBed):
             out["phone_connected"] = bed.sock is not None
@@ -670,7 +770,10 @@ class BedManager:
             out["state"] = "offline"
         elif st is None and now - bed.created_wall > 10:  # never produced a frame
             out["state"] = "offline"
-        if not detail:
+        if detail:
+            out["exam_history"] = list(bed.exam_history)
+            out["events"] = self.events_list(bed.bed_id, 40)
+        else:
             out.pop("features", None)
             out.pop("z", None)
             le = out.get("last_exam")
@@ -692,8 +795,35 @@ class BedManager:
             out["side"] = open_alert.side or out.get("side")
         return out
 
+    def _note_state(self, bed: Bed, state: str):
+        """Log camera offline / back online (state as shown, from bed_status)."""
+        prev = self._seen_state.get(bed.bed_id)
+        self._seen_state[bed.bed_id] = state
+        if prev is None or prev == state:
+            return
+        if state == "offline":
+            self.log(bed, "offline", "Camera offline: not monitoring", "warn")
+        elif prev == "offline":
+            self.log(bed, "online", "Camera back online", "ok")
+
     def snapshot(self) -> dict:
-        beds = [self.bed_status(b) for b in self.bed_list()]
+        bed_objs = self.bed_list()
+        beds = [self.bed_status(b) for b in bed_objs]
+        for b, st in zip(bed_objs, beds):
+            self._note_state(b, st["state"])
         with self.lock:
             alerts = [asdict(a) for a in self.alerts]
-        return {"type": "state", "server_time": time.time(), "beds": beds, "alerts": alerts}
+        return {"type": "state", "server_time": time.time(), "beds": beds, "alerts": alerts,
+                "events": self.events_list(limit=60), "stats": self._stats(alerts)}
+
+    def _stats(self, alerts: list[dict]) -> dict:
+        """Unit numbers for the last 24 h: alerts, BE-FAST checks, median time to acknowledge."""
+        since = time.time() - 86400
+        recent = [a for a in alerts if a["raised_at"] >= since]
+        acks = sorted(a["acked_at"] - a["raised_at"] for a in recent
+                      if a["acked_at"] and a["resolution"] not in ("reset", "removed"))
+        with self._ev_lock:
+            checks = sum(1 for e in self.events if e["t"] >= since and e["kind"] == "exam"
+                         and e["text"].startswith(("BE-FAST check:", "Hand test:")))
+        return {"alerts_24h": len(recent), "checks_24h": checks,
+                "median_ack_s": acks[len(acks) // 2] if acks else None}

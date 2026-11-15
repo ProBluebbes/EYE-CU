@@ -3,32 +3,75 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>StrokeWatch: ward</title>
+  <title>Azure Medical Center · Eye-CU</title>
+  <link rel="stylesheet" href="/static/theme.css">
   <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
-  <header class="dash-top">
-    <div class="brand">StrokeWatch <span class="muted">ward overview</span></div>
-    <div id="counts" class="counts"></div>
-    <button id="add-phone" class="addphone">Add phone</button>
-    <button id="add-demo" class="addphone demo">Add demo</button>
-    <button id="sound" class="sound off" title="Browsers only allow sound after a click">Enable alarm sound</button>
-    <div id="clock" class="clock"></div>
+  <header class="topbar" id="topbar">
+    <div class="top-right">
+      <label class="staff" title="Your initials are recorded with each action in the activity log">
+        <span>Signed in</span><input id="staff" placeholder="Initials" maxlength="12" autocomplete="off">
+      </label>
+      <button id="add-phone" class="btn btn-ghost">+ Add camera</button>
+      <button id="add-demo" class="btn btn-ghost" title="Add a recorded demo patient as a new bed">+ Add demo</button>
+      <button id="silence" class="btn btn-ghost" hidden>Silence 2 min</button>
+      <button id="sound" class="btn sound off" title="Browsers only allow sound after a click">Enable alarm sound</button>
+      <div class="clock"><div id="clock"></div><div id="date" class="date"></div></div>
+    </div>
   </header>
-  <div id="conn" class="conn" hidden>Disconnected from server: retrying…</div>
+  <div class="unitbar">
+    <div><span id="unit-name" class="unit-name"></span> <span class="muted">· Ward overview</span></div>
+    <div id="conn" class="conn" hidden>Connection to monitoring server lost: retrying…</div>
+  </div>
+
+  <section class="kpis" id="kpis"></section>
 
   <main class="dash">
-    <section id="grid" class="grid"></section>
-    <aside class="alerts">
-      <h2>Alerts <span id="alert-count" class="muted"></span></h2>
-      <div id="alert-list"><p class="muted">No alerts.</p></div>
+    <section class="beds">
+      <div class="toolbar">
+        <div class="filters" id="filters">
+          <button data-f="all" class="on">All beds</button>
+          <button data-f="alert">Alerts</button>
+          <button data-f="check">Checks running</button>
+          <button data-f="calib">Calibrating</button>
+          <button data-f="offline">Offline</button>
+        </div>
+        <div class="toolbar-right">
+          <input id="search" class="search" placeholder="Search bed or patient" autocomplete="off">
+          <label class="sort">Sort
+            <select id="sort"><option value="bed">Bed number</option><option value="priority">Priority</option></select>
+          </label>
+        </div>
+      </div>
+      <div id="grid" class="grid"></div>
+      <p id="empty" class="muted empty" hidden>No beds match this filter.</p>
+    </section>
+
+    <aside class="side">
+      <div class="panel">
+        <div class="panel-head"><h2>Active alerts</h2><span id="alert-count" class="muted"></span></div>
+        <div id="alert-list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Recently closed</h2></div>
+        <div id="closed-list"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Activity log</h2>
+          <select id="log-filter" class="mini-select">
+            <option value="all">All events</option><option value="alert">Alerts &amp; actions</option><option value="exam">BE-FAST checks</option>
+          </select>
+        </div>
+        <div id="log" class="log"></div>
+      </div>
     </aside>
   </main>
 
   <div id="modal" class="modal" hidden>
     <div class="modal-box">
       <button id="modal-close" class="modal-close" aria-label="Close">×</button>
-      <h2>Add a phone camera</h2>
+      <h2>Add a bedside camera</h2>
       <div id="modal-body"></div>
     </div>
   </div>
@@ -41,13 +84,14 @@
         (baseline), then droops slowly; it alerts at about 65 s.</p>
       <div class="demo-row">
         <select id="demo-select"></select>
-        <button id="demo-add" class="addphone">Add to dashboard</button>
+        <button id="demo-add" class="btn btn-primary">Add to ward</button>
       </div>
       <p id="demo-msg" class="muted"></p>
     </div>
   </div>
 
-  <footer class="disclaimer">Hackathon demo, not a medical device. Simulated patients are labelled SIM.</footer>
+  <footer class="footer">Eye-CU is a research prototype, not a medical device. Alerts support but never replace clinical assessment. Beds marked SIM or VIDEO are simulated or recorded, not live patients.</footer>
+  <script src="/static/common.js"></script>
   <script src="/static/dashboard.js"></script>
 </body>
 </html>

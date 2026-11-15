@@ -15,11 +15,13 @@ Endpoints
   WS   /api/dashboard/ws          JSON state (all beds + alerts + tunnel) and binary thumbnails
   GET  /bed/<id>                  bed page
   GET  /api/beds/<id>/video       MJPEG, full size, with landmarks; ?overlay=0 without
-  WS   /api/beds/<id>/ws          JSON status for one bed; webcam beds also {"type": "say", ...}
+  WS   /api/beds/<id>/ws?overlay=1|0  JSON status for one bed + binary JPEG video frames
+                                  (overlay=0: no landmarks); webcam beds also {"type": "say", ...}
                                   (spoken check prompts, played by the page)
   POST /api/beds/<id>/reset       rebuild baseline (closes any open alert as "reset")
   POST /api/beds/<id>/calibrate   same, as a guided calibration (look straight, turn and hold
                                   each side, straight again); prompts in the status
+  POST /api/beds/<id>/patient     {"name","mrn","age","sex","dx","attending","notes","lkw"}
   POST /api/beds/<id>/say         {"text": ...} phone beds: speak through the phone
   POST /api/beds/<id>/exam        start a voice-guided BE-FAST check (eyes, arms)
   POST /api/beds/<id>/exam?only=arms  hand test: arms out, palms up, 10 s (arm drift only)
@@ -28,6 +30,8 @@ Endpoints
   GET  /api/demos                 demo videos in clips/demo/;  POST {"name": ...} adds one as a bed
   POST /api/alerts/<n>/ack        acknowledge (silences the alarm, bed stays in ALERT)
   POST /api/alerts/<n>/resolve    {"resolution": "false_alarm"|"confirmed"} + rebuild baseline
+  POST /api/alerts/<n>/step       {"step": "team"|"glucose"|..., "done": bool} code-stroke checklist
+  (POST bodies may carry "by": staff initials, recorded in the activity log)
   GET  /phone                     phone camera page (Safari)
   WS   /api/phone/ws?device=&name=  phone -> server: JPEG frames; server -> phone: JSON
   GET  /api/connect               tunnel status + links;  GET /api/qr.svg?target=phone|dashboard
@@ -37,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import io
 from contextlib import asynccontextmanager
@@ -50,7 +55,7 @@ from fastapi.staticfiles import StaticFiles
 from . import ROOT, apply_overrides, load_config, palsy
 from .access import AccessKeyMiddleware, new_key
 from .befast import ServerVoice, exam_cfg
-from .beds import BedManager, CameraBed, DemoBed, PhoneBed, SimBed, bed_cfg
+from .beds import CHECKLIST, BedManager, CameraBed, DemoBed, PhoneBed, SimBed, bed_cfg
 from .mock import single_scenario, ward_scenarios
 from .tunnel import Tunnel
 
@@ -124,11 +129,26 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
             raise HTTPException(404, f"no bed {bed_id!r}")
         return bed
 
+    def staff(body: dict | None) -> str | None:
+        """Staff initials sent with an action (shown in the activity log)."""
+        by = str((body or {}).get("by") or "").strip()[:12]
+        return by or None
+
     def tunnel_info() -> dict:
         return tunnel.info() if tunnel else {"status": "off", "url": None, "error": None}
 
-    app = FastAPI(title="StrokeWatch", lifespan=lifespan)
+    app = FastAPI(title="Eye-CU", lifespan=lifespan)
     app.add_middleware(AccessKeyMiddleware, key=key)
+
+    @app.middleware("http")
+    async def revalidate(request, call_next):
+        """Pages and static files: browsers must check for a newer version on every load
+        (cheap 304 via ETag), so an update never mixes old cached CSS/JS with new pages."""
+        resp = await call_next(request)
+        path = request.url.path
+        if path in ("/", "/phone") or path.startswith(("/static/", "/bed/")):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
     thumb_period = 1.0 / bed_cfg(manager.cfg)["thumb_fps"]
     pc = phone_cfg(manager.cfg)
 
@@ -203,7 +223,8 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
         return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame")
 
     @app.websocket("/api/beds/{bed_id}/ws")
-    async def bed_ws(sock: WebSocket, bed_id: str):
+    async def bed_ws(sock: WebSocket, bed_id: str, overlay: int = 1):
+        marked = bool(overlay)
         await sock.accept()
         bed = manager.beds.get(bed_id)
         if bed is None:
@@ -219,12 +240,18 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
                     return
                 while not says.empty():  # spoken prompts: the page plays them
                     await sock.send_json(says.get_nowait())
-                fid, _, _ = bed.latest()
+                # Video rides on this socket too (binary JPEG after each status): no extra
+                # long-lived HTTP stream, so many open bed pages don't hit the browser's
+                # ~6-connections-per-server limit. overlay=0: without landmark lines/dots.
+                bed.want_full_frames(marked)
+                fid, jpeg, _ = bed.latest(marked)
                 st = manager.bed_status(bed, detail=True)
                 # every new frame, plus at least 1/s so "offline" shows up when frames stop
                 if fid != last or st["state"] == "offline":
                     last = fid
                     await sock.send_json(st)
+                    if jpeg is not None:
+                        await sock.send_bytes(jpeg)
                 await asyncio.sleep(0.05 if st["state"] != "offline" else 1.0)
         except (WebSocketDisconnect, RuntimeError):
             pass
@@ -232,16 +259,21 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
             bed_listeners.get(bed_id, set()).discard(says)
 
     @app.post("/api/beds/{bed_id}/reset")
-    def reset_bed(bed_id: str):
+    def reset_bed(bed_id: str, body: dict | None = Body(None)):
         get_bed(bed_id)
-        manager.reset_bed(bed_id)
+        manager.reset_bed(bed_id, by=staff(body))
         return {"ok": True}
 
     @app.post("/api/beds/{bed_id}/calibrate")
-    def calibrate_bed(bed_id: str):
+    def calibrate_bed(bed_id: str, body: dict | None = Body(None)):
         get_bed(bed_id)
-        manager.reset_bed(bed_id, calibrate=True)
+        manager.reset_bed(bed_id, calibrate=True, by=staff(body))
         return {"ok": True}
+
+    @app.post("/api/beds/{bed_id}/patient")
+    def set_patient(bed_id: str, body: dict = Body(...)):
+        get_bed(bed_id)
+        return {"ok": manager.set_patient(bed_id, body, staff(body))}
 
     @app.post("/api/beds/{bed_id}/say")
     async def say(bed_id: str, text: str = Body(..., embed=True)):
@@ -299,14 +331,22 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
 
     # ------------------------------------------------------------ alerts
     @app.post("/api/alerts/{alert_id}/ack")
-    def ack(alert_id: int):
-        return {"ok": manager.acknowledge(alert_id)}
+    def ack(alert_id: int, body: dict | None = Body(None)):
+        return {"ok": manager.acknowledge(alert_id, staff(body))}
 
     @app.post("/api/alerts/{alert_id}/resolve")
-    def resolve(alert_id: int, resolution: str = Body(..., embed=True)):
+    def resolve(alert_id: int, body: dict = Body(...)):
+        resolution = body.get("resolution")
         if resolution not in ("false_alarm", "confirmed"):
             raise HTTPException(400, "resolution must be false_alarm or confirmed")
-        return {"ok": manager.resolve(alert_id, resolution)}
+        return {"ok": manager.resolve(alert_id, resolution, staff(body))}
+
+    @app.post("/api/alerts/{alert_id}/step")
+    def checklist_step(alert_id: int, body: dict = Body(...)):
+        if body.get("step") not in CHECKLIST:
+            raise HTTPException(400, f"step must be one of {', '.join(CHECKLIST)}")
+        return {"ok": manager.checklist_step(alert_id, body["step"], bool(body.get("done", True)),
+                                             staff(body))}
 
     # ------------------------------------------------------------ phones
     @app.get("/phone")
@@ -401,6 +441,16 @@ def build_manager(cfg: dict, cameras: list[str], mock_beds: int, scenario: str |
                   ) -> BedManager:
     """cameras: ["0", "Bed 12=0", "clip.mp4", "rtsp://..."]. Beds are numbered in order."""
     manager = BedManager(cfg)
+    videos = []  # permanent video beds (config beds.videos), with their fixed bed numbers
+    for v in bed_cfg(cfg).get("videos") or []:
+        path = Path(v["source"]).expanduser()
+        path = path if path.is_absolute() else ROOT / path
+        if not path.is_file():
+            print(f"Video bed {v.get('bed') or v.get('label')!r} skipped: {path} not found")
+            continue
+        if v.get("bed"):
+            manager.reserve(int(v["bed"]))
+        videos.append((v, path))
     for spec in cameras:
         bed_id, name = manager.allocate()
         # Optional "NAME=SRC". A bare URL/path may contain "=" itself, but then the part before
@@ -410,6 +460,14 @@ def build_manager(cfg: dict, cameras: list[str], mock_beds: int, scenario: str |
         if eq and head.strip() and not any(c in head for c in ":/\\"):
             name, src = head.strip(), tail
         manager.add(CameraBed(bed_id, name, cfg, src))
+    # Permanent video beds: looped forever, always present.
+    for v, path in videos:
+        bed_id, name = (f"bed{int(v['bed'])}", f"Bed {int(v['bed'])}") if v.get("bed") \
+            else manager.allocate()
+        vcfg = apply_overrides(copy.deepcopy(cfg), v.get("set"))  # per-bed tweaks, as --set
+        bed = CameraBed(bed_id, v.get("name") or name, vcfg, str(path))
+        bed.kind, bed.label = "video", v.get("label")
+        manager.add(bed)
     scenarios = [single_scenario(scenario)] if scenario else ward_scenarios(mock_beds)
     for sc in scenarios:
         bed_id, name = manager.allocate()
@@ -443,7 +501,7 @@ def main():
     ap.add_argument("--set", action="append", metavar="KEY=VAL",
                     help="config override, e.g. detector.threshold=3.5")
     ap.add_argument("--no-palsy", action="store_true",
-                    help="droop alerts from StrokeWatch's detector alone (default: combined with the palsy model)")
+                    help="droop alerts from Eye-CU's own detector alone (default: combined with the palsy model)")
     ap.add_argument("--palsy-model", metavar="RUN_DIR",
                     help="palsynet run folder for the combined detection (default: palsy.model_dir in config.yaml)")
     args = ap.parse_args()
@@ -468,7 +526,7 @@ def main():
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="warning",
                                            timeout_graceful_shutdown=3, ws_max_size=4 * 2**20))
     app.state.server = server
-    print(f"StrokeWatch: {len(manager.beds)} bed(s) on http://{host}:{port}")
+    print(f"Eye-CU: {len(manager.beds)} bed(s) on http://{host}:{port}")
     if tunnel:
         print("Starting Cloudflare tunnel…")
         tunnel.start()
@@ -478,7 +536,7 @@ def main():
         if tunnel:
             tunnel.stop()
         manager.stop()  # idempotent; covers startup failures before lifespan teardown
-        print("StrokeWatch stopped, cameras released.")
+        print("Eye-CU stopped, cameras released.")
 
 
 if __name__ == "__main__":

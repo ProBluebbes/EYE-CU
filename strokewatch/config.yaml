@@ -221,6 +221,21 @@ beds:
   thumb_width: 320
   # A bed with no new frame for this long shows "camera offline".
   offline_after_s: 3
+  # Permanent video beds: added on every start (next to any --camera / --mock-beds beds),
+  # played in real time and looped forever, with the full model running on them.
+  # bed: the bed number it always gets (other beds are numbered around it); label: shown
+  # under the bed name. source is relative to the repo root (or absolute). Remove an entry
+  # to drop the bed. set: config overrides for that bed only (same form as --set). Both
+  # clips are filmed from below a patient lying in bed: head pitch +21..+28 deg, over the
+  # 20 deg default.
+  videos:
+    - bed: 2
+      label: "Demo video: asymmetrical smile"
+      source: videos/asymmetrical_smile.mp4
+      set: ["vision.max_pitch_deg=32"]
+    - bed: 3
+      label: "Demo video: bedside interview"
+      source: videos/bed3_patient.mp4   # head within normal limits: no overrides
 
 phone:
   # What phone camera pages send (web/phone.html): frames per second, longest image side

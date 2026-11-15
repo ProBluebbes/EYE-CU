@@ -1,4 +1,4 @@
-"""Render StrokeWatch's spoken prompts once with ElevenLabs -> web/voice/*.mp3 + manifest.json.
+"""Render Eye-CU's spoken prompts once with ElevenLabs -> web/voice/*.mp3 + manifest.json.
 
 The API key is read from the ELEVENLABS_API_KEY environment variable, or from a line
 ELEVENLABS_API_KEY=... in .env at the repo root (.env is git-ignored). Only the fixed prompt
@@ -32,7 +32,7 @@ FORMAT, KBPS = "mp3_44100_128", 128
 # Calm and unhurried: steadier delivery (stability), no added style, a bit slower than normal.
 SETTINGS = {"stability": 0.65, "similarity_boost": 0.75, "style": 0.0, "speed": 0.9,
             "use_speaker_boost": True}
-SAMPLE_TEXT = ("This is StrokeWatch. Please follow a few quick instructions. "
+SAMPLE_TEXT = ("This is Eye-CU. Please follow a few quick instructions. "
                "Without moving your head, look to your left.")
 CALM = re.compile(r"calm|soft|gentle|warm|sooth|relax|kind|friendly|reassur|soothing", re.I)
 

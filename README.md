@@ -1,4 +1,4 @@
-# StrokeWatch (hackathon MVP)
+# Eye-CU (formerly StrokeWatch; hackathon MVP)
 
 Webcam monitor that alerts on a NEW one-sided facial droop, relative to the patient's own
 automatically built baseline, plus more of BE-FAST: it watches for **eyes held to one side**

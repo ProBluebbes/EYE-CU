@@ -3,82 +3,162 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>StrokeWatch: bed</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <title>Azure Medical Center · Bed</title>
+  <link rel="stylesheet" href="/static/theme.css">
+  <link rel="stylesheet" href="/static/bed.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <nav class="topnav"><a href="/">&larr; Ward dashboard</a> <span id="bed-name" class="bed-name"></span>
-    <span id="bed-kind" class="kind-badge" hidden>SIM</span></nav>
+  <header class="topbar" id="topbar">
+    <div class="top-right">
+      <label class="staff" title="Your initials are recorded with each action in the activity log">
+        <span>Signed in</span><input id="staff" placeholder="Initials" maxlength="12" autocomplete="off">
+      </label>
+      <div class="clock"><div id="clock"></div><div id="date" class="date"></div></div>
+    </div>
+  </header>
+  <div class="unitbar">
+    <div class="crumbs"><a href="/">&larr; <span id="unit-name"></span></a> <span class="muted">›</span> <b id="crumb-bed"></b></div>
+  </div>
+
+  <section class="ptbanner panel">
+    <div class="pt-bed">
+      <div class="pt-bedname"><span id="bed-name">Bed</span> <span id="bed-kind" class="kind-badge" hidden></span></div>
+      <div id="bed-label" class="muted"></div>
+    </div>
+    <div id="pt-fields" class="pt-fields"></div>
+    <button id="pt-edit" class="btn">Edit patient</button>
+  </section>
+
   <header id="banner" class="banner baselining">
-    <div id="banner-text">Connecting…</div>
+    <div class="banner-row">
+      <div id="banner-text">Connecting…</div>
+      <div id="banner-time" class="banner-time"></div>
+    </div>
     <div id="banner-sub" class="banner-sub" hidden></div>
     <div id="progress-wrap"><div id="progress"></div></div>
   </header>
 
-  <main>
-    <section class="video-col">
-      <img id="video" alt="live camera">
-      <div class="video-row">
-        <div id="skip" class="chip">–</div>
-        <button id="overlay-toggle" class="overlay-toggle" aria-pressed="true"
-          title="Show or hide the face landmarks (lines and dots) on this video">Hide landmarks</button>
+  <main class="bedgrid">
+    <section class="col">
+      <div class="panel">
+        <div class="panel-head"><h2>Live camera</h2>
+          <div class="head-right"><span id="skip" class="pill">–</span>
+            <button id="overlay-toggle" class="btn btn-sm" aria-pressed="true"
+              title="Show or hide the face landmarks (lines and dots) on this video">Hide landmarks</button></div></div>
+        <div class="video-wrap"><img id="video" alt="live camera" hidden><div id="video-wait" class="video-wait">Connecting to camera…</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Droop score</h2><span class="muted">Eye-CU + palsy model, vs. this patient's baseline · last 60 s</span></div>
+        <div class="pad">
+          <div class="chart-wrap"><canvas id="chart"></canvas></div>
+          <div class="stats">
+            <div><span class="muted">Score</span><b id="score">–</b></div>
+            <div><span class="muted">Above threshold</span><b id="above">–</b></div>
+            <div><span class="muted">Head (yaw / pitch)</span><b id="pose">–</b></div>
+            <div><span class="muted">Frame rate</span><b id="fps">–</b></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>Per-feature change</h2><span class="muted">z-score · + = patient's left lower</span></div>
+        <div class="pad"><div id="zbars"></div></div>
       </div>
     </section>
 
-    <section class="side-col">
-      <div class="card" id="befast">
-        <div class="card-title">BE-FAST check <span class="muted">(eyes · arms, voice-guided)</span></div>
-        <div id="exam-live" class="exam-live" hidden>
-          <div class="exam-step"><span id="exam-idx" class="muted"></span> <b id="exam-label"></b></div>
-          <div id="exam-say" class="muted"></div>
-          <div class="exam-bar"><div id="exam-prog"></div></div>
-          <div id="exam-trigger" class="muted"></div>
-        </div>
-        <div id="exam-result" class="exam-result"><span class="muted">Starts by itself on a fixed gaze, or run it now.</span></div>
-        <div class="gaze-row" title="Horizontal eye position vs. this patient's centre (same orientation as the video)">
-          <span>gaze</span>
-          <div class="gtrack"><div class="gthr" id="gthr-r"></div><div class="gthr" id="gthr-l"></div>
-            <div class="gmid"></div><div id="gdot" class="gdot" hidden></div></div>
-          <span id="gaze-text" class="zval muted">–</span>
-        </div>
-        <div class="glabels muted"><span>patient's right</span><span>patient's left</span></div>
-        <div class="exam-btns">
-          <button id="exam-start">Run BE-FAST check</button>
-          <button id="hand-start" title="Arms out in front, palms up, eyes closed, 10 s: checks arm drift only (~25 s)">Hand test</button>
-          <button id="exam-cancel" class="danger" hidden>Stop check</button>
-        </div>
-        <div id="sound-row" class="sound-row" hidden>
-          <span id="sound-state"></span>
-          <button id="sound-test">Test voice</button>
+    <section class="col">
+      <div id="alert-panel" class="panel alert-panel" hidden>
+        <div class="panel-head"><h2>Stroke alert</h2><span id="alert-pill" class="pill alert"></span></div>
+        <div class="pad">
+          <ul id="alert-findings" class="findings"></ul>
+          <div id="alert-loc" class="alert-loc" hidden></div>
+          <div id="alert-notes"></div>
+          <div id="alert-meta" class="alert-meta"></div>
+          <div id="alert-timers"></div>
+          <div class="sec-label">Code stroke checklist</div>
+          <div id="alert-checklist"></div>
+          <div class="btn-row">
+            <button id="alert-ack" class="btn btn-primary">Acknowledge</button>
+            <button id="alert-false" class="btn" title="Close the alert and rebuild this bed's baseline">False alarm</button>
+            <button id="alert-confirm" class="btn btn-outline-danger" title="Mark as confirmed and escalated, close the alert and rebuild the baseline">Confirm stroke</button>
+          </div>
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-title">Droop score <span class="muted">(StrokeWatch + palsy model, vs. this patient's baseline)</span></div>
-        <div class="chart-wrap"><canvas id="chart"></canvas></div>
-        <div class="stats">
-          <div><span class="muted">score</span> <b id="score">–</b></div>
-          <div><span class="muted">above threshold</span> <b id="above">–</b></div>
-          <div><span class="muted">fps</span> <b id="fps">–</b></div>
+      <div class="panel" id="befast">
+        <div class="panel-head"><h2>BE-FAST check</h2><span class="muted">eyes · arms, voice-guided</span></div>
+        <div class="pad">
+          <div id="exam-live" class="exam-live" hidden>
+            <div class="exam-step"><span id="exam-idx" class="muted"></span> <b id="exam-label"></b></div>
+            <div id="exam-say" class="muted"></div>
+            <div class="exam-bar"><div id="exam-prog"></div></div>
+            <div id="exam-trigger" class="muted"></div>
+          </div>
+          <div id="exam-result" class="exam-result"></div>
+          <div class="gaze-row" title="Horizontal eye position vs. this patient's centre">
+            <span class="muted">Gaze</span>
+            <div class="gtrack"><div class="gthr" id="gthr-r"></div><div class="gthr" id="gthr-l"></div>
+              <div class="gmid"></div><div id="gdot" class="gdot" hidden></div></div>
+            <span id="gaze-text" class="zval muted">–</span>
+          </div>
+          <div class="glabels muted"><span>patient's right</span><span>patient's left</span></div>
+          <div class="btn-row">
+            <button id="exam-start" class="btn btn-primary">Run BE-FAST check</button>
+            <button id="hand-start" class="btn" title="Arms out in front, palms up, eyes closed, 10 s: checks arm drift only (~25 s)">Hand test</button>
+            <button id="exam-cancel" class="btn btn-danger" hidden>Stop check</button>
+          </div>
+          <div id="sound-row" class="sound-row" hidden>
+            <span id="sound-state"></span>
+            <button id="sound-test" class="btn btn-sm">Test voice</button>
+          </div>
         </div>
       </div>
 
-      <div class="card">
-        <div class="card-title">Per-feature change <span class="muted">(+ = patient's left lower)</span></div>
-        <div id="zbars"></div>
+      <div class="panel">
+        <div class="panel-head"><h2>Check history</h2></div>
+        <div id="exam-history" class="history"></div>
       </div>
 
-      <button id="reset">Reset &amp; rebuild baseline</button>
-      <button id="calibrate" title="Guided baseline: the patient looks straight, turns to each side and holds, then looks straight again. Improves accuracy with the head turned.">Calibrate head turns (guided, ~30 s)</button>
-      <div id="phone-actions" class="phone-actions" hidden>
-        <button id="say-test">Test phone speaker</button>
-        <button id="remove" class="danger">Remove this phone</button>
+      <div class="panel">
+        <div class="panel-head"><h2>Bed activity</h2></div>
+        <div id="bed-log" class="log"></div>
       </div>
-      <p class="disclaimer">Hackathon demo, not a medical device.</p>
+
+      <div class="panel">
+        <div class="panel-head"><h2>Bed controls</h2></div>
+        <div class="pad btn-row">
+          <button id="reset" class="btn" title="Closes any open alert and re-learns this patient's normal face">Reset &amp; rebuild baseline</button>
+          <button id="calibrate" class="btn btn-primary" title="Guided baseline: the patient looks straight, turns to each side and holds, then looks straight again. Improves accuracy with the head turned.">Calibrate head turns (guided, ~30 s)</button>
+          <span id="phone-actions" class="btn-row" hidden>
+            <button id="say-test" class="btn">Test phone speaker</button>
+            <button id="remove" class="btn btn-outline-danger">Remove this phone</button>
+          </span>
+        </div>
+      </div>
     </section>
   </main>
 
+  <div id="pt-modal" class="modal" hidden>
+    <form id="pt-form" class="modal-box pt-form">
+      <button type="button" id="pt-close" class="modal-close" aria-label="Close">×</button>
+      <h2>Patient details · <span id="pt-modal-bed"></span></h2>
+      <div class="form-grid">
+        <label>Patient name<input name="name" maxlength="80" autocomplete="off"></label>
+        <label>MRN<input name="mrn" maxlength="30" autocomplete="off"></label>
+        <label>Age<input name="age" maxlength="10" autocomplete="off"></label>
+        <label>Sex<select name="sex"><option value=""></option><option>F</option><option>M</option><option>X</option></select></label>
+        <label class="wide">Admitting diagnosis<input name="dx" maxlength="120" autocomplete="off"></label>
+        <label>Attending physician<input name="attending" maxlength="60" autocomplete="off"></label>
+        <label title="Used for the treatment-window timers when an alert opens">Last known well<input name="lkw" type="datetime-local"></label>
+        <label class="wide">Notes<textarea name="notes" maxlength="300" rows="3"></textarea></label>
+      </div>
+      <p class="muted small">Stored on this monitoring server only while it runs. Last known well, if set, replaces the camera's onset estimate in the treatment-window timers.</p>
+      <div class="btn-row"><button type="submit" class="btn btn-primary">Save</button><button type="button" id="pt-cancel" class="btn">Cancel</button></div>
+    </form>
+  </div>
+
+  <footer class="footer">Eye-CU is a research prototype, not a medical device. Alerts support but never replace clinical assessment.</footer>
+  <script src="/static/common.js"></script>
   <script src="/static/voice.js"></script>
   <script src="/static/bed.js"></script>
 </body>

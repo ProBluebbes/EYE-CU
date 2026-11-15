@@ -171,7 +171,7 @@ class Step:
 
 
 STEPS = (
-    Step("intro", "This is StrokeWatch. Please follow a few quick instructions.",
+    Step("intro", "This is Eye-CU. Please follow a few quick instructions.",
          "Quick check: please follow the instructions", 4.5),
     Step("center", "Keep your head still, and look straight at the camera.",
          "Look straight at the camera", 4.5, 2.5, "gaze"),
@@ -826,7 +826,7 @@ def _selftest():
     assert res["components"]["eyes"]["status"] == "normal"
     assert res["components"]["arms"]["status"] == "normal"
     assert list(res["components"]) == ["eyes", "arms"], res["components"]
-    assert said[0].startswith("This is StrokeWatch") and said[-1] == "That's all, thank you."
+    assert said[0].startswith("This is Eye-CU") and said[-1] == "That's all, thank you."
 
     # new LEFT weakness: eyes deviate RIGHT, can't look left, left arm drifts
     sc = SimScenario(label="left stroke", side=1, gaze_dev_at=10, arm_weak_at=10)

@@ -1,4 +1,4 @@
-// Phone camera page: camera -> (rotate, downscale) -> JPEG over a WebSocket to StrokeWatch.
+// Phone camera page: camera -> (rotate, downscale) -> JPEG over a WebSocket to Eye-CU.
 // The server sends back JSON: hello (bed + send settings), status (1/s), say (speak text;
 // with a "step" during a BE-FAST check, also shown big on screen for the patient).
 const $ = (id) => document.getElementById(id);
@@ -165,7 +165,7 @@ function connect() {
     const m = JSON.parse(e.data);
     if (m.type === "hello") {
       cfg = { ...cfg, ...m };
-      document.title = `StrokeWatch: ${m.bed_name}`;
+      document.title = `Eye-CU: ${m.bed_name}`;
       startSending();
     } else if (m.type === "status") onStatus(m);
     else if (m.type === "say") { say(m.text); if (m.step !== undefined) showPrompt(m.step, m.text); }
@@ -223,7 +223,7 @@ function stopAll() {
 
 // ---------------------------------------------------------------- buttons
 $("start").onclick = () => {
-  say("StrokeWatch camera on.");  // speech must start inside the tap itself (iOS rule), before any await
+  say("Eye-CU camera on.");  // speech must start inside the tap itself (iOS rule), before any await
   store.set("name", $("name").value.trim());
   start();
 };
@@ -236,9 +236,9 @@ $("flip").onclick = async () => {
   renderFacing();
   try { await startCamera(); } catch (e) { showMsg(`Could not switch camera (${e.name}).`, true); }
 };
-$("voice").onclick = () => say("This is a voice test from StrokeWatch.");
+$("voice").onclick = () => say("This is a voice test from Eye-CU.");
 $("calibrate").onclick = () => {
-  if (!ws || ws.readyState !== 1) { showMsg("Not connected to StrokeWatch yet.", true); return; }
+  if (!ws || ws.readyState !== 1) { showMsg("Not connected to Eye-CU yet.", true); return; }
   say("Calibration starting.");  // inside the tap, so iOS allows the spoken prompts that follow
   lastPrompt = null;
   ws.send(JSON.stringify({ type: "calibrate" }));

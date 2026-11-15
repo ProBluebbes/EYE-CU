@@ -1,0 +1,112 @@
+/* Bed page layout (theme.css holds the shared look). */
+.pad { padding: 12px 14px; }
+.small { font-size: 12px; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+.pad.btn-row { margin-top: 0; }
+
+/* ---------------------------------------------------------------- patient banner */
+.ptbanner { display: flex; align-items: center; gap: 20px; margin: 14px 20px 0; padding: 12px 16px; flex-wrap: wrap; }
+.pt-bed { min-width: 170px; }
+.pt-bedname { font-size: 22px; font-weight: 700; color: var(--navy); display: flex; align-items: center; gap: 8px; }
+.pt-fields { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 6px 18px; border-left: 1px solid var(--border); padding-left: 18px; }
+.pt-f .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); font-weight: 600; }
+.pt-f .v { font-weight: 600; font-size: 13.5px; }
+.pt-f .v.none { color: var(--faint); font-weight: 400; }
+
+/* ---------------------------------------------------------------- status banner */
+.banner { margin: 12px 20px 0; padding: 12px 18px; border-radius: 8px; font-size: 20px; font-weight: 700; border: 1px solid transparent; }
+.banner-row { display: flex; align-items: center; gap: 16px; justify-content: space-between; }
+.banner-time { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.banner.starting, .banner.baselining { background: var(--primary-tint); color: var(--primary-dark); border-color: #bcd6f2; }
+.banner.monitoring { background: var(--ok-tint); color: var(--ok); border-color: #b5dfc7; }
+.banner.ALERT { background: var(--alert); color: #fff; animation: bpulse 1s infinite alternate; }
+.banner.ALERT.acked { animation: none; background: var(--alert-dark); }
+.banner.offline { background: var(--warn-tint); color: var(--warn); border-color: #f0d29b; }
+.banner.exam { background: var(--check-tint); color: var(--check); border-color: #d5c9f2; }
+.banner-sub { font-size: 14px; font-weight: 600; margin-top: 4px; opacity: 0.95; }
+@keyframes bpulse { from { filter: brightness(1); } to { filter: brightness(1.18); } }
+#progress-wrap { height: 6px; margin-top: 8px; background: rgba(16, 104, 196, 0.15); border-radius: 3px; overflow: hidden; }
+#progress { height: 100%; width: 0; background: var(--primary); transition: width 0.3s; }
+.banner:not(.baselining) #progress-wrap { display: none; }
+
+/* ---------------------------------------------------------------- layout */
+.bedgrid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(340px, 1fr); gap: 14px; padding: 14px 20px 16px; align-items: start; }
+.col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+@media (max-width: 980px) { .bedgrid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .ptbanner, .banner { margin-left: 16px; margin-right: 16px; }
+  .bedgrid { padding: 12px 16px; }
+  .pt-fields { border-left: 0; padding-left: 0; }
+}
+.video-wrap { background: #0d1b2a; border-radius: 0 0 8px 8px; overflow: hidden; }
+#video { width: 100%; display: block; }
+.video-wait { aspect-ratio: 4 / 3; display: flex; align-items: center; justify-content: center; color: #b9cde4; font-weight: 600; }
+.chart-wrap { height: 210px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+.stats div { display: flex; flex-direction: column; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+.stats .muted { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+.stats b { font-size: 17px; font-variant-numeric: tabular-nums; color: var(--navy); }
+@media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+
+.zrow { display: grid; grid-template-columns: 90px 1fr 50px; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px; }
+.ztrack { position: relative; height: 12px; background: var(--grey-tint); border-radius: 4px; }
+.ztrack::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; background: var(--border2); }
+.zfill { position: absolute; top: 0; bottom: 0; background: #5b9be0; border-radius: 4px; }
+.zfill.hot { background: var(--alert); }
+.zval { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- alert panel */
+.alert-panel { border-color: #f0b9bc; border-top: 4px solid var(--alert); }
+.alert-panel h2 { color: var(--alert-dark); }
+.alert-meta { color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+.alert-loc { font-size: 12.5px; margin-top: 6px; }
+.alert-note { color: var(--warn); font-size: 12.5px; margin-top: 4px; }
+.banner-loc { font-size: 13px; font-weight: 500; margin-top: 3px; opacity: 0.95; }
+.sec-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-top: 10px; }
+
+/* ---------------------------------------------------------------- BE-FAST */
+.exam-live { background: var(--check-tint); border: 1px solid #d5c9f2; border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; }
+.exam-step { font-size: 15px; color: var(--check); }
+.exam-bar { height: 5px; background: #dcd3f3; border-radius: 3px; margin: 8px 0 4px; overflow: hidden; }
+.exam-bar div { height: 100%; width: 0; background: var(--check); transition: width 0.2s; }
+.exam-live .muted { font-size: 12.5px; }
+.exam-result { font-size: 13px; margin-bottom: 8px; }
+.exam-head { font-weight: 700; margin-bottom: 4px; }
+.exam-head.flagged { color: var(--alert); }
+.comp { display: grid; grid-template-columns: 76px 100px 1fr; gap: 8px; align-items: baseline; margin: 4px 0; font-size: 12.5px; }
+.st { font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 999px; text-align: center; background: var(--grey-tint); color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px; }
+.st.normal { background: var(--ok-tint); color: var(--ok); }
+.st.abnormal { background: var(--alert); color: #fff; }
+.st.no_response, .st.inconclusive { background: var(--warn-tint); color: var(--warn); }
+.exam-head.inconclusive { color: var(--warn); }
+.gaze-row { display: grid; grid-template-columns: 44px 1fr 90px; align-items: center; gap: 10px; margin-top: 8px; font-size: 13px; }
+.gtrack { position: relative; height: 12px; background: var(--grey-tint); border-radius: 4px; }
+.gmid { position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px; background: var(--border2); }
+.gthr { position: absolute; top: 0; bottom: 0; width: 1px; background: #e7a9ac; }
+.gdot { position: absolute; top: 1px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; background: var(--primary); }
+.gdot.hot { background: var(--alert); }
+.glabels { display: flex; justify-content: space-between; font-size: 11px; margin: 2px 100px 0 54px; }
+
+.head-right { display: flex; align-items: center; gap: 8px; }
+.btn-sm { padding: 4px 9px; font-size: 12px; }
+.sound-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px;
+  padding-top: 10px; border-top: 1px solid var(--border); font-size: 12.5px; }
+.sound-off { color: var(--warn); font-weight: 700; }
+
+.history { padding: 4px 0; max-height: 260px; overflow-y: auto; }
+.hist { display: grid; grid-template-columns: 62px 1fr; gap: 8px; padding: 6px 14px; font-size: 12.5px; border-bottom: 1px solid var(--grey-tint); }
+.hist:last-child { border-bottom: 0; }
+.hist .when { color: var(--faint); font-variant-numeric: tabular-nums; }
+.hist .what.flagged { color: var(--alert-dark); font-weight: 600; }
+.hist .why { color: var(--muted); font-size: 11.5px; }
+
+/* ---------------------------------------------------------------- patient form */
+.pt-form { max-width: 620px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+.form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.form-grid .wide { grid-column: 1 / -1; }
+.form-grid input, .form-grid select, .form-grid textarea {
+  font: inherit; font-size: 14px; color: var(--text); padding: 7px 9px; border: 1px solid var(--border2); border-radius: 6px; background: var(--surface);
+}
+.form-grid input:focus, .form-grid select:focus, .form-grid textarea:focus { outline: 2px solid #9cc4ee; border-color: var(--primary); }
+@media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
