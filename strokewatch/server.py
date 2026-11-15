@@ -467,6 +467,8 @@ def build_manager(cfg: dict, cameras: list[str], mock_beds: int, scenario: str |
         vcfg = apply_overrides(copy.deepcopy(cfg), v.get("set"))  # per-bed tweaks, as --set
         bed = CameraBed(bed_id, v.get("name") or name, vcfg, str(path))
         bed.kind, bed.label = "video", v.get("label")
+        if v.get("patient"):  # default patient details (staff can still edit them)
+            bed.patient = {k: str(x) for k, x in v["patient"].items() if x}
         manager.add(bed)
     scenarios = [single_scenario(scenario)] if scenario else ward_scenarios(mock_beds)
     for sc in scenarios:

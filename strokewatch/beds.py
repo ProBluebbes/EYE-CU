@@ -29,7 +29,7 @@ from .mock import SimScenario
 from .vision import (FaceAnalyzer, FrameFeatures, PoseAnalyzer, PoseFeatures, VideoSource,
                      draw_landmarks, draw_pose, draw_readout)
 
-BED_DEFAULTS = {"analysis_fps": 15, "sim_fps": 10, "thumb_fps": 4, "thumb_width": 320,
+BED_DEFAULTS = {"analysis_fps": 15, "sim_fps": 10, "thumb_fps": 10, "thumb_width": 480,
                 "offline_after_s": 3.0}
 FULL_FRAME_IDLE_S = 2.0  # stop encoding full-size JPEGs when no bed page has asked for 2 s
 
@@ -85,7 +85,7 @@ class Bed(threading.Thread):
         self._calibrate = False
         self._stop_evt = threading.Event()
         self._jpeg_q = [int(cv2.IMWRITE_JPEG_QUALITY), cfg["server"]["jpeg_quality"]]
-        self._thumb_q = [int(cv2.IMWRITE_JPEG_QUALITY), 60]
+        self._thumb_q = [int(cv2.IMWRITE_JPEG_QUALITY), 80]
 
     # ------------------------------------------------------------ control (any thread)
     def reset(self, calibrate: bool = False):

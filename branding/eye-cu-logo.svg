@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="20 20 200 130" width="400" height="260">
+  <title>Eye-CU logo</title>
+  <!-- I = the two lids, C = the eye, U = the iris. Thin white gaps make the overlaps read as layers. -->
+  <g fill="none" stroke-linecap="round">
+    <!-- C: the eye -->
+    <path d="M112 50 A38 38 0 1 0 140.5 113.6" stroke="#16206B" stroke-width="13"/>
+    <!-- I: upper and lower lid -->
+    <path d="M36 82 C 44 58, 128 38, 206 50" stroke="#FFFFFF" stroke-width="19"/>
+    <path d="M36 82 C 44 58, 128 38, 206 50" stroke="#0E1116" stroke-width="12"/>
+    <path d="M80 138 C 88 126, 158 130, 204 112" stroke="#FFFFFF" stroke-width="19"/>
+    <path d="M80 138 C 88 126, 158 130, 204 112" stroke="#0E1116" stroke-width="12"/>
+    <!-- U: the iris -->
+    <path d="M130 66 C 124 88, 128 116, 149 116 C 170 116, 174 88, 168 66" stroke="#FFFFFF" stroke-width="20"/>
+    <path d="M130 66 C 124 88, 128 116, 149 116 C 170 116, 174 88, 168 66" stroke="#3A90A2" stroke-width="13"/>
+  </g>
+</svg>

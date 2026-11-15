@@ -164,7 +164,7 @@ function eventRow(e, withBed) {
 function brandBar(subtitle) {
   const bar = el("div", "brandbar");
   const logo = el("div", "logo");
-  logo.innerHTML = `<svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#2b8ce6"/><path d="M13 7h6v6h6v6h-6v6h-6v-6H7v-6h6z" fill="#fff"/></svg>`;
+  logo.innerHTML = `<img src="/static/eye-cu-logo.svg" alt="Eye-CU" height="32" style="height:32px;width:auto;flex-shrink:0;background:#fff;border-radius:7px;padding:2px 5px">`;
   const names = el("div", "brand-names");
   names.append(el("div", "brand-hosp", HOSPITAL), el("div", "brand-app", subtitle || "Eye-CU · Continuous Neuro Monitoring"));
   logo.append(names);

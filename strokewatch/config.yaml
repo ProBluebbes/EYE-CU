@@ -136,8 +136,16 @@ palsy:
   # held-out benchmark clips at <= 1% flagged no-droop moments; 18/36 synthetic droops vs 6/36 for StrokeWatch
   # alone, but those droops were >= ~5 mm) it alerted later than StrokeWatch alone on 2-3 mm droops. The line
   # scales with the weight between StrokeWatch alone (weight 0, line 1.0) and that tuned point: 1 + 0.74 x weight.
-  model_weight: 0.25
-  line: 1.19
+  # Back to full weight (Nov 15 2026): on the synthetic-droop benchmark (scripts/droop_eval.py, 36 droops, 6
+  # untouched clips) weight 0.25 caught exactly what StrokeWatch alone caught (6/36); 0.5 13/36, 0.75 17/36,
+  # 1.0 18/36, all with 0/6 false alerts. Smallest (~4 mm) droops: 8.6 s to alert at 1.0 vs 8.1 s at 0.25.
+  model_weight: 1.0
+  line: 1.74
+  # The model only counts while the head faces the camera: a 2 s window with the head turned more than this
+  # (deg, left/right) adds nothing and StrokeWatch alone decides. Live, full weight with no gate gave false
+  # alerts on head turns; on the benchmark the 15 deg gate keeps 13/36 droops (StrokeWatch alone 6/36), 0/6
+  # false alerts, and no turned-head moment over the line (1.3% without the gate). 0 = no gate.
+  yaw_gate_deg: 15
   baseline_s: 20      # the model's personal baseline: its scores over the first 20 s
   avg_windows: 4      # p averaged over the last 4 model updates (~2 s)
   hop_s: 0.5          # one model update every 0.5 s, on the last 2 s of landmarks
@@ -217,25 +225,39 @@ beds:
   # Frame rate of simulated patients (--mock-beds / --mock).
   sim_fps: 10
   # Dashboard thumbnails: frames per second and width in pixels.
-  thumb_fps: 4
-  thumb_width: 320
+  thumb_fps: 10
+  thumb_width: 480
   # A bed with no new frame for this long shows "camera offline".
   offline_after_s: 3
   # Permanent video beds: added on every start (next to any --camera / --mock-beds beds),
   # played in real time and looped forever, with the full model running on them.
   # bed: the bed number it always gets (other beds are numbered around it); label: shown
   # under the bed name. source is relative to the repo root (or absolute). Remove an entry
-  # to drop the bed. set: config overrides for that bed only (same form as --set). Both
-  # clips are filmed from below a patient lying in bed: head pitch +21..+28 deg, over the
-  # 20 deg default.
+  # to drop the bed. set: config overrides for that bed only (same form as --set).
+  # Healthy people only (Nov 15 2026): the stroke-patient videos (videos/asymmetrical_smile.mp4,
+  # filmed from below, needed vision.max_pitch_deg=32; videos/bed3_patient.mp4) and the droop
+  # demos (clips/demo/, "Add demo") are left out of the permanent beds. Each clip below was looped
+  # 90-180 s through the full pipeline: no alert, combined score <= 0.45 (line 1.19). Not used:
+  # palsy-dataset "unaffected" clips (people talk non-stop; the score reached 1.07-1.55).
   videos:
     - bed: 2
-      label: "Demo video: asymmetrical smile"
-      source: videos/asymmetrical_smile.mp4
-      set: ["vision.max_pitch_deg=32"]
+      label: "Healthy: Banghua"
+      source: clips/banghua.mp4
+    - bed: 5
+      label: "Healthy: Kevin"
+      source: clips/kevin.mp4
+    - bed: 4
+      label: "Healthy: Stan"
+      source: clips/stan.mp4
     - bed: 3
-      label: "Demo video: bedside interview"
-      source: videos/bed3_patient.mp4   # head within normal limits: no overrides
+      label: "Healthy: Dan"
+      patient: {name: "Dan"}
+      source: clips/still.mov
+      set: ["camera.rotate=90"]       # recorded sideways
+    - bed: 6
+      label: "Healthy: Pan (head tilts)"
+      patient: {name: "Pan"}
+      source: clips/phonetilt.MOV
 
 phone:
   # What phone camera pages send (web/phone.html): frames per second, longest image side

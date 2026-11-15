@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2928 1856" width="2928" height="1856">
+  <title>Eye-CU title slide</title>
+  <rect width="2928" height="1856" fill="#FFFFFF"/>
+  <!-- logo (branding/eye-cu-logo.svg, viewBox 20 20 200 130) scaled 6.4x, centred -->
+  <g transform="translate(1464 700) scale(6.4) translate(-120 -85)" fill="none" stroke-linecap="round">
+    <path d="M112 50 A38 38 0 1 0 140.5 113.6" stroke="#16206B" stroke-width="13"/>
+    <path d="M36 82 C 44 58, 128 38, 206 50" stroke="#FFFFFF" stroke-width="19"/>
+    <path d="M36 82 C 44 58, 128 38, 206 50" stroke="#0E1116" stroke-width="12"/>
+    <path d="M80 138 C 88 126, 158 130, 204 112" stroke="#FFFFFF" stroke-width="19"/>
+    <path d="M80 138 C 88 126, 158 130, 204 112" stroke="#0E1116" stroke-width="12"/>
+    <path d="M130 66 C 124 88, 128 116, 149 116 C 170 116, 174 88, 168 66" stroke="#FFFFFF" stroke-width="20"/>
+    <path d="M130 66 C 124 88, 128 116, 149 116 C 170 116, 174 88, 168 66" stroke="#3A90A2" stroke-width="13"/>
+  </g>
+  <text x="1464" y="1340" text-anchor="middle" font-family="SF Pro Rounded, ui-rounded, Helvetica Neue, Arial, sans-serif"
+        font-size="190" font-weight="700" fill="#16206B" letter-spacing="4">Eye-CU</text>
+  <text x="1464" y="1480" text-anchor="middle" font-family="SF Pro Rounded, ui-rounded, Helvetica Neue, Arial, sans-serif"
+        font-size="72" fill="#5F7489" letter-spacing="2">Continuous stroke monitoring for every bed</text>
+</svg>

@@ -13,7 +13,7 @@ Decision, every model update (0.5 s):
                                                      (0 until that is built)
     p = 3D-CNN p(affected) on the last 2 s, averaged over the last `avg_windows` updates (5 fold models averaged)
     ALERT when combined >= `line` continuously for detector.alert_seconds (6 s).
-    model_weight 0.25 / line 1.19 (config.yaml): the model counts much less than StrokeWatch's own score.
+    model_weight 1.0 / line 1.74 (config.yaml); windows with the head turned > yaw_gate_deg do not count.
 
 Configured in config.yaml `palsy:`; turned off with `server --no-palsy` or when the model folder is missing (then
 StrokeWatch's own detector raises alerts as before). Models are loaded once and shared by all beds; inference runs
@@ -120,6 +120,10 @@ class CombinedDroop:
         self.baseline_s = float(self.pc.get("baseline_s", 20))
         self.hop_s = float(self.pc.get("hop_s", 0.5))
         self.smooth = int(self.pc.get("smooth_frames", 3))
+        # head-turn gate: a 2 s window with the head turned more than this (deg, left/right) does not count
+        # (model term 0, StrokeWatch alone decides): the 3D-CNN reacts to head turns (13% of healthy turned
+        # windows flagged >30 deg). 0 = off.
+        self.yaw_gate = float(self.pc.get("yaw_gate_deg", 15))
         self.alert_seconds = alert_seconds
         self.hist = deque(maxlen=int(self.pc.get("avg_windows", 4)))
         self.lock = threading.Lock()
@@ -129,8 +133,11 @@ class CombinedDroop:
         """New patient / rebuilt baseline (called with the detector's reset)."""
         self.smoother, self.size = None, None
         self.buf: deque = deque(maxlen=self.M.num_frames)
+        self.yaws: deque = deque(maxlen=self.M.num_frames)  # |yaw| of each buffered frame
         self.next_sample = self.next_pred = None
         self.pending: Future | None = None
+        self.pending_yaw = 0.0
+        self.turned = False
         self.hist.clear()
         self.base_logits: list[float] = []
         self.base_start: float | None = None
@@ -156,10 +163,12 @@ class CombinedDroop:
         if self.smoother is None or self.size != (w, h):
             self.smoother, self.size = self._Smoother(self.smooth, w, h, max_gap=self.max_gap), (w, h)
             self.buf.clear()
+            self.yaws.clear()
             self.next_sample = None
         for lf in self.smoother.push(None, landmarks, t):
             if lf.features is None:
                 self.buf.clear()
+                self.yaws.clear()
                 self.next_sample = None
                 self.state = "no face"
                 continue
@@ -167,11 +176,13 @@ class CombinedDroop:
                 self.next_sample = lf.timestamp
             if lf.timestamp + 1e-6 >= self.next_sample:
                 self.buf.append(lf.features)
+                self.yaws.append(abs(float(lf.pose[0])) if lf.pose is not None else 0.0)
                 self.next_sample += 1.0 / self.M.sample_fps
             if len(self.buf) < self.M.num_frames:
                 self.state = "collecting"
             elif self.pending is None and (self.next_pred is None or lf.timestamp + 1e-6 >= self.next_pred):
                 self.pending = self.M.worker.submit(self.M.infer, np.stack(self.buf))
+                self.pending_yaw = max(self.yaws) if self.yaws else 0.0
                 self.next_pred = lf.timestamp + self.hop_s
         return new
 
@@ -184,6 +195,11 @@ class CombinedDroop:
         except Exception as e:  # never take the bed down because of a model error
             self.state = f"model error: {e}"
             return False
+        self.turned = bool(self.yaw_gate) and self.pending_yaw > self.yaw_gate
+        if self.turned:  # head turned in this window: the model does not count (and is not averaged in)
+            self.rel = None
+            self.state = "head turned (model paused)"
+            return True
         self.hist.append(p)
         self.p_avg = float(np.mean(self.hist))
         lg = _logit(self.p_avg)
@@ -228,7 +244,7 @@ class CombinedDroop:
         return {"state": self.state, "model": self.M.name, "p": self.p_avg, "relative": self.rel,
                 "sw_term": round(self.sw_term, 3), "model_term": round(self.model_term, 3),
                 "model_weight": self.model_weight, "score": round(self.score, 3), "line": self.line,
-                "above_seconds": round(self.above, 2),
+                "above_seconds": round(self.above, 2), "head_turned": self.turned, "yaw_gate": self.yaw_gate,
                 "baseline_progress": 1.0 if self.base_median is not None else (
                     0.0 if self.base_start is None or self.last_t is None
                     else min(1.0, (self.last_t - self.base_start) / self.baseline_s))}
