@@ -126,6 +126,20 @@ detector:
   # Cap on time credited between two frames (so pauses/dropped frames don't count).
   max_dt: 0.25
 
+# Combined droop detection (default; strokewatch/palsy.py): StrokeWatch's score / threshold + a learned palsy
+# model's logit relative to the patient's first baseline_s seconds; ALERT at >= line for detector.alert_seconds.
+# Benchmarked on 6 clips with synthetic droops (scripts/droop_eval.py): 18/36 droops caught, 0/6 false alerts
+# (StrokeWatch alone: 6/36). Missing model folder or server --no-palsy: StrokeWatch's detector alone, as before.
+palsy:
+  enabled: true
+  model_dir: runs/cv_landmark_geom_cnn_20261114-212730   # palsynet 3D-CNN (face-surface CNN), 5 folds averaged
+  line: 1.74          # chosen on held-out clips at <= 1% flagged no-droop moments
+  baseline_s: 20      # the model's personal baseline: its scores over the first 20 s
+  avg_windows: 4      # p averaged over the last 4 model updates (~2 s)
+  hop_s: 0.5          # one model update every 0.5 s, on the last 2 s of landmarks
+  smooth_frames: 3    # landmark smoothing at 15 fps (training: 5 frames at ~30 fps)
+  device: auto
+
 # BE-FAST "Eyes", passive (befast.GazeMonitor). gaze = iris offset from the middle of the eye
 # opening / eye width, both eyes averaged (+ = patient's left; about 0.15-0.25 at full sideways
 # gaze). Eyes held to one side for window_s -> a voice-guided check starts (see exam).

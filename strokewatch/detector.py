@@ -85,6 +85,9 @@ class Status:
 class Detector:
     def __init__(self, cfg: dict):
         self.dc = cfg["detector"]
+        # False when strokewatch/palsy.py's combined score decides alerts (the bed then sets state "ALERT");
+        # the baseline and score here are unchanged either way
+        self.native_alerts = True
         self.reset()
 
     def reset(self, calibrate: bool = False):
@@ -286,8 +289,8 @@ class Detector:
                 self._finish_baseline()
                 if self.calibrating:
                     self.prompt, self.prompt_until = CALIB_DONE, ff.t + 6.0
-        elif valid:
-            skip = self._score(ff, dt)
+        elif valid and self.base_pose is not None:  # an ALERT raised by the combined detection
+            skip = self._score(ff, dt)               # before this baseline finished: nothing to score against
             if skip:
                 valid, reason = False, skip
         return self._status(ff.t, valid, reason)
@@ -349,7 +352,7 @@ class Detector:
         elif self.score < pre:
             self.above_time = 0.0
             self.episode_onset = None
-        if self.above_time >= self.dc["alert_seconds"]:
+        if self.above_time >= self.dc["alert_seconds"] and self.native_alerts:
             self.state = "ALERT"
             self.onset_time = self.episode_onset
         return None

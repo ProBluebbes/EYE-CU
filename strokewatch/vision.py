@@ -369,6 +369,7 @@ class FaceAnalyzer:
             output_facial_transformation_matrixes=True,
         )
         self.landmarker = mpv.FaceLandmarker.create_from_options(opts)
+        self.last_lms: np.ndarray | None = None
         self._last_ms = -1
         self._motion = MotionGate(self.vc.get("max_head_speed_dps", 0))
         if self.vc.get("yaw_bias") and yaw_bias_table(self.vc) is None:
@@ -386,8 +387,11 @@ class FaceAnalyzer:
         res = self.landmarker.detect_for_video(img, ms)
         if not res.face_landmarks:
             self._motion.reset()
+            self.last_lms = None
             return FrameFeatures(t=t, reason="no face"), None
         lms = res.face_landmarks[0]
+        # normalised (478, 3) landmarks of this frame, for the learned palsy models (strokewatch/palsy.py)
+        self.last_lms = np.array([(p.x, p.y, p.z) for p in lms], dtype=np.float32)
         ff = compute_features(lms, res.face_blendshapes[0] if res.face_blendshapes else None,
                               res.facial_transformation_matrixes[0], w, h, t, self.vc)
         self._motion.apply(ff)

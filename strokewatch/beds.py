@@ -21,6 +21,7 @@ import cv2
 import numpy as np
 
 from .befast import STOPPED, ExamRunner, GazeMonitor, exam_cfg
+from . import palsy
 from .detector import Detector
 from .localize import localize
 from .mock import SimScenario
@@ -45,6 +46,10 @@ class Bed(threading.Thread):
         self.bc = bed_cfg(cfg)
         self.interval = 1.0 / fps
         self.detector = Detector(cfg)
+        # combined droop detection (StrokeWatch + palsy model vs own baseline); None = StrokeWatch alone
+        self.combined = palsy.new_bed_state(fps, cfg["detector"]["alert_seconds"])
+        if self.combined is not None:
+            self.detector.native_alerts = False
         self.on_alert = None  # set by BedManager: fn(bed, status_dict)
         self.on_say = None    # set by BedManager: fn(bed, text, step_key) -> speak to the patient
         self.on_exam_done = None  # set by BedManager: fn(bed, result_dict)
@@ -201,11 +206,32 @@ class Bed(threading.Thread):
         finally:
             self.close()
 
+    def _combined_tick(self, frame: np.ndarray, ff: FrameFeatures, px: np.ndarray | None, st: dict):
+        """Feed the palsy model and apply the combined rule; the bed's score / threshold become the combined
+        score and its line (dashboard, bed page and alerts use them), StrokeWatch's own are kept as sw_*."""
+        c, d = self.combined, self.detector
+        if self.exam is None:  # deliberate eye/arm movements during a BE-FAST check: pause like the detector
+            analyzer = getattr(self, "analyzer", None)  # camera / phone beds; simulated beds have none
+            lms = analyzer.last_lms if (analyzer is not None and px is not None) else None
+            h, w = frame.shape[:2]
+            if c.push(lms, w, h, ff.t, ff.mouth_diff if ff.valid else None):
+                if c.decide(ff.t, d.state, d.score, d.dc["threshold"]) and d.state != "ALERT":
+                    d.state = "ALERT"
+                    d.side = c.side(d.side)
+                    d.onset_time = ff.t - c.above
+                    st.update(state="ALERT", side=d.side, onset_time=d.onset_time)
+        cs = c.status()
+        st["sw_score"], st["sw_threshold"] = st["score"], st["threshold"]
+        st.update(score=cs["score"], threshold=cs["line"], pre_threshold=round(cs["line"] * 0.625, 2),
+                  above_seconds=cs["above_seconds"], combined=cs)
+
     def _process(self, frame: np.ndarray, ff: FrameFeatures, px: np.ndarray | None):
         if self._reset.is_set():
             self._reset.clear()
             self.detector.reset(calibrate=self._calibrate)
             self.gaze.reset()
+            if self.combined is not None:
+                self.combined.reset()
             if self.exam:
                 self.exam.cancel("bed reset")
                 self.exam = None
@@ -228,6 +254,8 @@ class Bed(threading.Thread):
                           ("mouth_diff", "eye_ratio", "brow_diff", "yaw", "pitch", "roll",
                            "gaze_h", "blink")}
         st["gaze"] = self.gaze.status()
+        if self.combined is not None:
+            self._combined_tick(frame, ff, px, st)
         st["exam"] = self.exam.status() if self.exam else {"active": False}
         st["last_exam"] = self.last_exam
 

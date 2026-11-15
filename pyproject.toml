@@ -15,6 +15,9 @@ dependencies = [
     "tqdm>=4.66",
     "mediapipe>=0.10.14",
     "av>=17.1.0",
+    "fastapi>=0.162.5",
+    "uvicorn[standard]>=0.54.0",
+    "segno>=1.6.6",
 ]
 
 [build-system]

@@ -44,7 +44,7 @@ from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import ROOT, apply_overrides, load_config
+from . import ROOT, apply_overrides, load_config, palsy
 from .access import AccessKeyMiddleware, new_key
 from .befast import ServerVoice, exam_cfg
 from .beds import BedManager, CameraBed, PhoneBed, SimBed, bed_cfg
@@ -168,6 +168,8 @@ def create_app(manager: BedManager, key: str | None = None, tunnel: Tunnel | Non
     def bed_page(bed_id: str):
         get_bed(bed_id)
         return FileResponse(WEB / "bed.html")
+
+
 
     @app.get("/api/beds/{bed_id}/video")
     async def video(bed_id: str):
@@ -404,8 +406,13 @@ def main():
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--set", action="append", metavar="KEY=VAL",
                     help="config override, e.g. detector.threshold=3.5")
+    ap.add_argument("--no-palsy", action="store_true",
+                    help="droop alerts from StrokeWatch's detector alone (default: combined with the palsy model)")
+    ap.add_argument("--palsy-model", metavar="RUN_DIR",
+                    help="palsynet run folder for the combined detection (default: palsy.model_dir in config.yaml)")
     args = ap.parse_args()
     cfg = apply_overrides(load_config(args.config), args.set)
+    palsy.configure(cfg, enabled=not args.no_palsy, model_dir=args.palsy_model)
 
     cameras = args.camera + args.source
     if not (cameras or args.mock or args.mock_beds or args.tunnel):
