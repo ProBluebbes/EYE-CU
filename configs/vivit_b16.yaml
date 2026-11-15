@@ -1,0 +1,20 @@
+# ViViT Model 1 (joint spatio-temporal attention), initialised from ImageNet ViT-B/16.
+# Tokens = (T / tubelet_t) * (size / 16)^2 + 1 = (32/2) * 10^2 + 1 = 1601; cost grows with tokens^2.
+base: default.yaml
+data:
+  sample_fps: 6.4   # 5 s -> T = 32 frames
+  size: 160         # 10x10 patches; 224 would give 3137 tokens
+  batch_size: 2
+model:
+  name: vivit
+  pretrained: vit_b_16    # or null to train from scratch
+  tubelet_init: central   # central | inflate
+  tubelet_t: 2
+  patch_size: 16
+  embed_dim: 768
+  depth: 12
+  heads: 12
+  drop_path: 0.1
+  head_dropout: 0.3
+train:
+  lr: 5.0e-5

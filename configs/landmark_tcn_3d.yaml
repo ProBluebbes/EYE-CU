@@ -1,0 +1,15 @@
+# 2 s landmark TCN on 3D-frontalised, smoothed landmarks:
+# - raw landmark trajectories smoothed with a centred 5-frame moving average (removes detector jitter,
+#   which differs between cameras; live delay 2 frames)
+# - each frame rotated to a frontal view using MediaPipe's depth and rigid face points only
+#   (eye corners, outline at ear level, forehead/nose-bridge midline), so head turns no longer look
+#   like asymmetry; x, y and depth are all used as features
+base: landmark_tcn_2s.yaml
+data:
+  landmark_mode: 3d
+  landmark_smooth: 5
+  augment:
+    rot_deg: 5     # small residual yaw/pitch/roll
+    scale: 0.05
+    shift: 0.03
+    noise: 0.003

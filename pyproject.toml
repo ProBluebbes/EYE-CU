@@ -1,0 +1,28 @@
+[project]
+name = "palsynet"
+version = "0.1.0"
+description = "Facial palsy classification on the jasir/palsynet-data dataset (PyTorch)"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "torch>=2.4",
+    "torchvision>=0.19",
+    "opencv-python-headless>=4.9",
+    "huggingface-hub>=0.24",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scikit-learn>=1.5",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "mediapipe>=0.10.14",
+    "av>=17.1.0",
+    "fastapi>=0.162.5",
+    "uvicorn[standard]>=0.54.0",
+    "segno>=1.6.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/palsynet"]

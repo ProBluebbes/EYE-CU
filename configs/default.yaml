@@ -1,0 +1,29 @@
+# Shared base config. Model configs set `base: default.yaml` and override what they need.
+seed: 42
+raw_root: data/raw/data
+splits: data/splits.json
+output_dir: runs
+fold: 0            # test fold; val = (fold + 1) % n_folds; train = the rest
+
+data:
+  segment_seconds: 5
+  sample_fps: 10   # frames per segment T = segment_seconds * sample_fps (source is 30 fps)
+  size: 224        # output frames are size x size
+  mean: [0.485, 0.456, 0.406]   # ImageNet
+  std: [0.229, 0.224, 0.225]
+  hflip: true
+  crop_scale: [0.7, 1.0]        # RandomResizedCrop area range (train only)
+  train_segments_per_video: 16  # random segments per video per epoch
+  eval_segments_per_video: 10   # evenly spaced segments, averaged per video
+  batch_size: 4
+  num_workers: 4
+
+train:
+  epochs: 15
+  lr: 1.0e-4
+  weight_decay: 0.05
+  warmup_epochs: 1
+  grad_accum: 1    # optimizer step every N batches (effective batch = batch_size * grad_accum)
+  device: auto     # auto | cuda | mps | cpu
+  amp: true        # CUDA only
+  select_metric: auc   # video-level metric used to pick the best checkpoint

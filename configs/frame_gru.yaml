@@ -1,0 +1,7 @@
+# 2D ResNet-18 (ImageNet) per frame + bidirectional GRU over time.
+base: default.yaml
+model:
+  name: frame_gru
+  pretrained: true
+  hidden: 256
+  dropout: 0.3

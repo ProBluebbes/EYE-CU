@@ -1,0 +1,8 @@
+# 3D landmark TCN + ~100 extra "unaffected" webcam clips from Microsoft VCD2 (scripts/fetch_vcd.py).
+# Breaks the "webcam / selfie recording = affected" shortcut of the palsynet data: ordinary people on
+# consumer webcams are now in the unaffected class. Classes are balanced by segments per video;
+# VCD test-fold clips are held out and scored with scripts/eval_webcam.py.
+base: landmark_tcn_3d.yaml
+data:
+  extra_unaffected: data/vcd/videos.json
+  balance_classes: true

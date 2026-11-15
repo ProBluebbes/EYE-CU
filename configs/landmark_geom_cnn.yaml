@@ -1,0 +1,11 @@
+# Face-surface 3D CNN: per-point landmark features (asymmetry, motion, change of asymmetry) interpolated onto a
+# 32x32 "geometry image" of the face (symmetric mean-face layout, scripts/build_face_topology.py), then a residual
+# 3D CNN over time x face height x face width. Same data, sampling and augmentation as the best landmark TCN
+# (landmark_tcn_3d_vcd_expr_still). Heavier than the TCN: meant for a GPU (Colab: --set train.device=cuda).
+base: landmark_tcn_3d_vcd_expr_still.yaml
+model:
+  name: landmark_geom_cnn
+  features: [asym, vel, asym_vel]
+  grid: 32
+  width: 32
+  dropout: 0.3

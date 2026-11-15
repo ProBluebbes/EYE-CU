@@ -30,7 +30,9 @@ function pushChart(st) {
   const x = st.t - t0;
   const [score, thr] = chart.data.datasets;
   // gap in the line while baselining or skipping frames
-  score.data.push({ x, y: st.state !== "baselining" && st.valid ? st.score : null });
+  // combined detection scores while StrokeWatch is still building its baseline; StrokeWatch alone does not
+  const scored = st.combined ? st.combined.state === "scoring" || st.state !== "baselining" : st.state !== "baselining" && st.valid;
+  score.data.push({ x, y: scored ? st.score : null });
   thr.data.push({ x, y: st.threshold });
   for (const ds of chart.data.datasets) {
     while (ds.data.length && ds.data[0].x < x - WINDOW_S) ds.data.shift();

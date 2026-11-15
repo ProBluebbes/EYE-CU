@@ -1,0 +1,28 @@
+# Landmark-only model: 152 face landmarks over time (aligned, in eye units), no pixels.
+# Removes the recording-style shortcut (lighting, camera, background) that pixel models can use
+# on this dataset. Needs data/aligned/landmarks from scripts/preprocess_faces.py. Trains on CPU in minutes.
+base: default.yaml
+data:
+  input: landmarks
+  landmarks_root: data/aligned/landmarks
+  train_segments_per_video: 64  # cheap, so more random segments per epoch
+  batch_size: 32
+  num_workers: 0
+  augment:                      # hflip comes from data.hflip
+    rot_deg: 5
+    scale: 0.05
+    shift: 0.03
+    noise: 0.005
+model:
+  name: landmark_tcn
+  features: [asym, vel, asym_vel]   # add pos to also use raw face shape (more identity -> more overfitting)
+  hidden: 128
+  layers: 3
+  kernel: 5
+  dropout: 0.3
+train:
+  epochs: 30
+  lr: 1.0e-3
+  weight_decay: 0.05
+  warmup_epochs: 1
+  device: cpu

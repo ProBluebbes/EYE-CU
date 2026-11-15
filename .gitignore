@@ -6,3 +6,15 @@ models/*.task
 tmp/
 .DS_Store
 .env
+
+# palsynet (facial palsy models): large local data, results and bundles
+data/
+runs/
+models/
+dist/
+*.pyc
+
+# local test recordings (large, personal) and local tool settings
+strokewatch/*.mov
+strokewatch/*.MOV
+.claude/

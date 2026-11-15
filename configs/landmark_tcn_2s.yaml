@@ -1,0 +1,6 @@
+# Landmark TCN on 2 s segments instead of 5 s: reacts faster live (one expression fills a window),
+# at the cost of less context per prediction. Same features, model and training as landmark_tcn.yaml.
+base: landmark_tcn.yaml
+data:
+  segment_seconds: 2            # 20 frames at 10 fps
+  eval_segments_per_video: 25   # more, shorter segments averaged per video at evaluation

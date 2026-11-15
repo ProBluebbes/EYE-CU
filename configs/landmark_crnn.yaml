@@ -1,0 +1,12 @@
+# Landmark CNN + RNN: same input, features and training as landmark_tcn.yaml, but 2 temporal conv
+# layers followed by a bidirectional GRU over the whole 5 s segment.
+base: landmark_tcn.yaml
+model:
+  name: landmark_crnn
+  features: [asym, vel, asym_vel]
+  hidden: 128
+  layers: 2                 # temporal conv layers before the GRU
+  kernel: 5
+  rnn_hidden: 128
+  rnn_layers: 1
+  dropout: 0.3

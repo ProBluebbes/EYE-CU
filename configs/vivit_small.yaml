@@ -1,0 +1,21 @@
+# Small ViViT Model 1 (joint spatio-temporal attention) trained from scratch.
+# Tokens = (32/2) * (112/16)^2 + 1 = 785.
+base: default.yaml
+data:
+  sample_fps: 6.4   # 5 s -> T = 32 frames
+  size: 112
+  batch_size: 8
+model:
+  name: vivit
+  pretrained: null
+  tubelet_t: 2
+  patch_size: 16
+  embed_dim: 192
+  depth: 6
+  heads: 3
+  dropout: 0.1
+  drop_path: 0.1
+  head_dropout: 0.3
+train:
+  lr: 3.0e-4
+  epochs: 30

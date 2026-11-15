@@ -37,6 +37,19 @@ For phone cameras: `brew install cloudflared`.
 `--camera` is repeatable and takes a webcam index, video file or RTSP URL. Stop the server with
 **Ctrl+C** (not Ctrl+Z, which only pauses it and keeps the camera on).
 
+### Combined droop detection (default)
+
+Droop alerts combine StrokeWatch's baseline-change score with a learned facial-palsy model (palsynet 3D-CNN,
+see `README_palsynet.md`) measured against the patient's own first 20 s:
+`combined = StrokeWatch score / threshold (0 while building its baseline) + model logit − its first-20-s median`,
+ALERT at ≥ 1.74 for 6 s. StrokeWatch skips frames while the head moves or tilts and may take long to build its
+baseline; the model keeps scoring then, and the personal baseline stops it reacting to someone's normal face.
+On six clips with a synthetic one-sided mouth droop (`scripts/droop_benchmark.py`, `scripts/droop_eval.py`) it
+caught 18/36 droops with 0/6 false alerts; StrokeWatch alone caught 6/36 (only on the still clip). The dashboard
+and bed page show the combined score against its line; StrokeWatch's own score is kept in the status as
+`sw_score`. Settings: `palsy:` in `config.yaml`. `--no-palsy` (or a missing model folder) = StrokeWatch alone;
+`--palsy-model RUN_DIR` picks another model. Needs `torch` (this repo's `uv` environment).
+
 ### Ward dashboard
 
 `/` shows every bed: live thumbnail, status (building baseline / monitoring / ALERT / camera
