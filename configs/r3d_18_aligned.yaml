@@ -1,0 +1,6 @@
+# r3d_18 on landmark-aligned faces (scripts/preprocess_faces.py -> data/aligned).
+# Same relative video paths, so data/splits.json is reused unchanged.
+base: r3d_18.yaml
+raw_root: data/aligned
+data:
+  crop_scale: [0.85, 1.0]   # faces are already centred/scaled; keep augmentation from undoing that

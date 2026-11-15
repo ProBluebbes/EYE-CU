@@ -1,0 +1,12 @@
+# Spatio-temporal graph CNN (ST-GCN) over the 152 face points: graph convolutions along the face mesh (contour +
+# 4-nearest-neighbour edges, scripts/build_face_topology.py) with a separate left<->right mirror-partner
+# partition, interleaved with temporal convolutions. Same data, sampling and augmentation as the best landmark
+# TCN (landmark_tcn_3d_vcd_expr_still).
+base: landmark_tcn_3d_vcd_expr_still.yaml
+model:
+  name: landmark_stgcn
+  features: [asym, vel, asym_vel]
+  channels: [64, 64, 128, 128]
+  strides: [1, 1, 2, 1]
+  t_kernel: 5
+  dropout: 0.3

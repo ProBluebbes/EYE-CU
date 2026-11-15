@@ -1,0 +1,16 @@
+# Memory across windows (CNN + RNN, "option 2"): each 2 s window is encoded by the landmark TCN, then a
+# causal GRU runs over the last seq_len windows (seq_hop s apart, so ~13 s of history), and the verdict for
+# the newest window uses that history (e.g. the person's usual resting face). Same data and augmentation as
+# landmark_tcn_3d_vcd_expr_still. Training samples a random history length (1..seq_len), and evaluation
+# segments early in a video have less history, like the warm-up of a live session.
+base: landmark_tcn_3d_vcd_expr_still.yaml
+data:
+  seq_len: 12
+  seq_hop: 1.0
+  train_segments_per_video: 64   # each sample is ~6-7 windows on average, so the encoder still sees ~3x the TCN windows
+model:
+  name: landmark_seq_gru
+  gru_hidden: 128
+  gru_layers: 1
+train:
+  epochs: 20

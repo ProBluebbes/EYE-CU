@@ -1,0 +1,17 @@
+# ViViT-B/16 (joint space-time attention) on landmark-aligned faces, tuned to adapt more to our data:
+# higher base LR than vivit_b16.yaml, 10x LR on the video/task-specific parts, tubelets that see both frames.
+base: vivit_b16.yaml
+raw_root: data/aligned
+data:
+  crop_scale: [0.85, 1.0]   # faces already centred/scaled
+  batch_size: 4
+model:
+  tubelet_init: inflate     # tubelet filter spans both frames from the start (central = middle frame only)
+train:
+  lr: 1.0e-4                # vivit_b16.yaml: 5e-5
+  grad_accum: 2             # effective batch 8
+  epochs: 6                 # r3d_18 peaked by epoch 3 in every fold; ViViT with a higher LR fits even faster
+  lr_mult:                  # parameter-name prefix -> LR multiplier
+    patch_embed: 10         # tubelet embedding: must learn motion
+    pos_temporal: 10        # temporal position embedding: new, not in ViT
+    head: 10                # classifier for our task

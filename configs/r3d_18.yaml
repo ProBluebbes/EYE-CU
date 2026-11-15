@@ -1,0 +1,16 @@
+# 3D CNNs (Kinetics-400 pretrained). Swap with --set model.name=mc3_18; r2plus1d_18 has its own config.
+# Segments: 5 s @ 10 fps = 50 frames (from default.yaml). Intended for a CUDA GPU (e.g. Colab);
+# on Apple-Silicon MPS this runs ~10 s/step.
+base: default.yaml
+data:
+  size: 112                              # resolution the Kinetics weights were trained at
+  mean: [0.43216, 0.394666, 0.37645]     # Kinetics-400
+  std: [0.22803, 0.22145, 0.216989]
+  batch_size: 8
+model:
+  name: r3d_18
+  pretrained: true
+  dropout: 0.3
+  freeze: null                           # optional, e.g. [stem, layer1, layer2] to fine-tune only the later blocks
+train:
+  lr: 3.0e-4

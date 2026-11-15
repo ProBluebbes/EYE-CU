@@ -1,0 +1,6 @@
+# landmark_tcn_3d_vcd_expr + "still face" augmentation: 30% of training windows are played at 0-50% speed
+# (some fully frozen), for both classes with the label kept. All healthy training clips show people
+# talking, so without this a face held still in front of the webcam scored ~0.6 "affected".
+base: landmark_tcn_3d_vcd_expr.yaml
+data:
+  slow_prob: 0.3

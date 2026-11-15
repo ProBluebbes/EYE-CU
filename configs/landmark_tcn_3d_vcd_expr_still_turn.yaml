@@ -1,0 +1,7 @@
+# landmark_tcn_3d_vcd_expr_still + "turned head" oversampling: 30% of training windows are placed over a moment
+# where the head is turned > 12 deg left/right (when the video has one), for both classes. Only ~5% of frames
+# have such turns, and there MediaPipe guesses the far side of the face, which looks like asymmetry.
+base: landmark_tcn_3d_vcd_expr_still.yaml
+data:
+  turn_prob: 0.3
+  turn_deg: 12

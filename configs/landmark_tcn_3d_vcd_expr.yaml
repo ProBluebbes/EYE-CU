@@ -1,0 +1,14 @@
+# 3D landmark TCN + two sets of extra "unaffected" (healthy) clips:
+#   - ~100 Microsoft VCD2 webcam clips, people talking / reading (scripts/fetch_vcd.py)
+#   - ~1400 RAVDESS clips, 24 actors making 8 emotional expressions at normal and strong intensity
+#     (scripts/fetch_ravdess.py)
+# The second set stops the model from reading "big facial expression" as a sign of palsy.
+# Half of the unaffected training budget goes to the original unaffected videos, the other half is
+# shared equally between the two extra sets. Held-out folds of both are scored with scripts/eval_webcam.py.
+base: landmark_tcn_3d.yaml
+data:
+  extra_unaffected: [data/vcd/videos.json, data/ravdess/videos.json]
+  balance_classes: true
+  # ~860 short RAVDESS training clips get at least 1 segment each; doubling the affected budget
+  # keeps the classes roughly balanced (~1.2 unaffected : 1 affected) instead of ~1.6 : 1
+  train_segments_per_video: 128

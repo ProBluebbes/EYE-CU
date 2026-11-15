@@ -1,0 +1,9 @@
+# R(2+1)D-18. Batch 8 trips the macOS GPU watchdog on MPS ("Impacting Interactivity"),
+# so use batch 2 with 4-step gradient accumulation (effective batch 8).
+base: r3d_18.yaml
+data:
+  batch_size: 2
+model:
+  name: r2plus1d_18
+train:
+  grad_accum: 4
