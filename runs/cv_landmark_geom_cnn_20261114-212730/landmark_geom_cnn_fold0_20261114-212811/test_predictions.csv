@@ -1,0 +1,11 @@
+video_id,label,prob_affected,pred,n_segments
+unaffected_1,unaffected,0.1309,unaffected,25
+unaffected_4,unaffected,0.0035,unaffected,25
+unaffected_9,unaffected,0.0054,unaffected,25
+unaffected_10,unaffected,0.0410,unaffected,25
+unaffected_15,unaffected,0.0499,unaffected,25
+affected_9,affected,0.2108,unaffected,25
+affected_12,affected,0.9978,affected,25
+affected_15,affected,1.0000,affected,25
+affected_25,affected,0.9863,affected,25
+affected_27,affected,0.9701,affected,25

@@ -1,0 +1,60 @@
+data:
+  augment:
+    noise: 0.003
+    rot_deg: 5
+    scale: 0.05
+    shift: 0.03
+  balance_classes: true
+  batch_size: 32
+  crop_scale:
+  - 0.7
+  - 1.0
+  eval_segments_per_video: 25
+  extra_unaffected:
+  - data/vcd/videos.json
+  - data/ravdess/videos.json
+  hflip: true
+  input: landmarks
+  landmark_mode: 3d
+  landmark_smooth: 5
+  landmarks_root: data/aligned/landmarks
+  mean:
+  - 0.485
+  - 0.456
+  - 0.406
+  num_workers: 0
+  sample_fps: 10
+  segment_seconds: 2
+  size: 224
+  slow_prob: 0.3
+  std:
+  - 0.229
+  - 0.224
+  - 0.225
+  train_segments_per_video: 128
+fold: 4
+model:
+  dropout: 0.3
+  features:
+  - asym
+  - vel
+  - asym_vel
+  grid: 32
+  hidden: 128
+  kernel: 5
+  layers: 3
+  name: landmark_geom_cnn
+  width: 32
+output_dir: /content/drive/MyDrive/palsynet/runs/cv_landmark_geom_cnn_20261114-212730
+raw_root: data/raw/data
+seed: 42
+splits: data/splits.json
+train:
+  amp: true
+  device: cuda
+  epochs: 30
+  grad_accum: 1
+  lr: 0.001
+  select_metric: auc
+  warmup_epochs: 1
+  weight_decay: 0.05
